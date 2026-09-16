@@ -45,7 +45,7 @@ Non-Functional Requirements
 - Repository pattern
 -- Don't put a repository on top of EF which already uses the repository pattern
 
-Open Questions
+Open Questions and Things to Remember
 - Should we use a game engine to manage the business logic a grid?
 - Should we introduce an abstraction on top of the grid because my ADHD brain has a hard time reasoning over raw indexing?
 -- Might be good to introduce some domain modeling
@@ -58,6 +58,7 @@ Open Questions
 --- If not, use some other data store
 - Is the flow write heavy or read heavy?
 -- If relationally, postgres (MVCC) or SQL Server?
+--- Don't forget indexes, stored procs vs. prepared statements, query plans
 -- If not relational, and write heavy, should we use a columnar data store with a write ahead log?
 --- How should we design the schema for querying?
 - Should we use CQRS?
@@ -66,8 +67,13 @@ Open Questions
 -- Should we spin up redis?
 - Should we emulate union types since .NET 8 doesn't have them?
 - We should probably err on the side of doing things on a single node but use an abstraction that allows us to distribute
+- Should we use a micro-ORM or EF?
+- Database-first or code-first (I prefer DB)?
+- Don't forget logging
+- Don't forget to guard against invalid inputs
 
 Action items:
 - Write up a design doc
 -- Include decisions and rationales
 -- Include diagrams
+
