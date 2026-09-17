@@ -62,7 +62,7 @@ The story implies the shape of the system directly.
 
 ```mermaid
 flowchart LR
-    S["Someone sends a seed<br/>(the exercise's 'board')"] --> T["Web boundary<br/>translates board to universe"]
+    S["Someone sends a seed<br/>(the exercise's 'board')"] --> T["Api boundary<br/>translates board to universe"]
     T --> K["Universe is saved once,<br/>with its rule and topology"]
     K --> G["Any generation is computed<br/>from the seed on demand"]
     K --> F["Fate is determined by generating<br/>until a repeat or the budget"]
@@ -454,7 +454,7 @@ EF Core's `DbSet<T>` is already a repository and `DbContext` is already a unit o
 What is defined instead is a port, not a wrapper:
 
 ```csharp
-// Core: expressed entirely in the Life domain's terms
+// Domain: expressed entirely in the Life domain's terms
 public interface IUniverseRepository
 {
     Task<Universe?> FindAsync(UniverseId id, CancellationToken ct);
@@ -476,14 +476,14 @@ Four projects. Dependencies point **inward only**.
 
 ```mermaid
 flowchart LR
-    subgraph Web["Web (ASP.NET Core)"]
+    subgraph Api["Api (ASP.NET Core)"]
         EP[Controllers]
         MW["Middleware: ProblemDetails, OTel, RateLimiter"]
     end
-    subgraph UC["UseCases (Application)"]
+    subgraph UC["Application (Application)"]
         H["Command / query handlers"]
     end
-    subgraph Core["Core (Domain)"]
+    subgraph Domain["Domain (Domain)"]
         AGG[Universe]
         GRID[Pattern]
         RULE[ILifeRule]
@@ -501,17 +501,17 @@ flowchart LR
     AGG --> RULE
     AGG --> TOPO
     EFC -. implements .-> PORTS
-    Web -. "composition root / DI wiring only" .-> Infra
+    Api -. "composition root / DI wiring only" .-> Infra
 ```
 
 | Project | Responsibility | May reference |
 |---|---|---|
-| `Core` | Entities, value objects, rules, ports. Zero infrastructure dependencies | Nothing |
-| `UseCases` | Handlers orchestrating domain and ports. Returns `Result<T>` | `Core` |
-| `Infrastructure` | EF Core adapter implementing the Core port | `Core` |
-| `Web` | Controllers, serialisation, middleware, composition root | `Core`, `UseCases`, `Infrastructure` |
+| `Domain` | Entities, value objects, rules, ports. Zero infrastructure dependencies | Nothing |
+| `Application` | Handlers orchestrating domain and ports. Returns `Result<T>` | `Domain` |
+| `Infrastructure` | EF Core adapter implementing the Domain port | `Domain` |
+| `Api` | Controllers, serialisation, middleware, composition root | `Domain`, `Application`, `Infrastructure` |
 
-The one inward-violating arrow, `Web` to `Infrastructure`, exists solely so the composition root can register implementations. No Web code calls an Infrastructure type directly.
+The one inward-violating arrow, `Api` to `Infrastructure`, exists solely so the composition root can register implementations. No Api code calls an Infrastructure type directly.
 
 This is enforced rather than merely documented. An architecture test asserts the dependency rule, so a violation fails the build instead of surviving review.
 
@@ -569,7 +569,7 @@ The costs, meanwhile, are concrete: a second deployable, job identity and state,
 
 The boundary is still worth defining even though nothing crosses it yet, because defining it is what keeps the option cheap.
 
-The seam is the evaluation request: `(seed, rule, topology, target)` to a pattern. Today the handler satisfies that in-process by calling the domain. Whether it is satisfied in-process or by a remote worker is an infrastructure concern, and the domain holds no opinion about it. Nothing in `Core` or `UseCases` would change if the answer arrived over a queue rather than a stack frame.
+The seam is the evaluation request: `(seed, rule, topology, target)` to a pattern. Today the handler satisfies that in-process by calling the domain. Whether it is satisfied in-process or by a remote worker is an infrastructure concern, and the domain holds no opinion about it. Nothing in `Domain` or `Application` would change if the answer arrived over a queue rather than a stack frame.
 
 #### What would trigger a split, and what would split first
 
@@ -608,7 +608,7 @@ A recurring failure mode in design documents is stating a library choice as thou
 
 | Concern | Architectural decision (durable) | Current implementation (swappable) | What would change the implementation |
 |---|---|---|---|
-| Use-case dispatch | Web depends on an abstraction, not on concrete handlers | Four hand-rolled interfaces, injected as closed generics | The first real cross-cutting concern, which makes a pipeline worth having |
+| Use-case dispatch | Api depends on an abstraction, not on concrete handlers | Four hand-rolled interfaces, injected as closed generics | The first real cross-cutting concern, which makes a pipeline worth having |
 | Expected failures | Modelled as values, not exceptions | `Result<T>` | .NET gaining real discriminated unions |
 | Durability | Write-once universe in a durable store | EF Core + SQLite | Scaling past one replica ([§7.3](#73-store-choice)), or a move to DynamoDB |
 | Evolution rule | Strategy, not hard-coded | `StandardLifeRule` (B3/S23) | Supporting HighLife or another Life-like rule |
@@ -621,11 +621,11 @@ A recurring failure mode in design documents is stating a library choice as thou
 
 Controllers are thin by deliberate construction: bind and validate the request, hand off to a handler, map the resulting `Result<T>` onto a status code. No business logic, no data access, no orchestration.
 
-The architectural commitment is that `Web` depends on an abstraction rather than on concrete handler classes. A mediator library is one way to satisfy that. It is not the only way, and here it is not the one chosen.
+The architectural commitment is that `Api` depends on an abstraction rather than on concrete handler classes. A mediator library is one way to satisfy that. It is not the only way, and here it is not the one chosen.
 
 #### The shape
 
-Four small interfaces in `UseCases`, with no package reference behind them:
+Four small interfaces in `Application`, with no package reference behind them:
 
 ```csharp
 public interface ICommand { }
@@ -667,7 +667,7 @@ If a single dispatch point were genuinely wanted later, the right tool would be 
 
 #### What this gives up
 
-A pipeline. Cross-cutting behaviour that a mediator would supply through behaviours has to live somewhere else: validation stays at the Web boundary ([§10.1](#101-validation-and-input-bounds)), and logging and tracing go in middleware, which is where ASP.NET Core already puts them.
+A pipeline. Cross-cutting behaviour that a mediator would supply through behaviours has to live somewhere else: validation stays at the Api boundary ([§10.1](#101-validation-and-input-bounds)), and logging and tracing go in middleware, which is where ASP.NET Core already puts them.
 
 That trade only works because nothing repeats across handlers yet. The trigger for revisiting is in [§9.2](#92-minimal-now-with-a-defined-path): once handlers start duplicating a concern, a pipeline earns its place, and at that point adopting a library is a better answer than slowly growing one.
 
@@ -708,7 +708,7 @@ Each row has a trigger rather than a date. I'd rather add a pattern when somethi
 
 ### 10.1 Validation and input bounds
 
-Validation happens at the system boundary, in Web, with the domain additionally enforcing its own invariants through guard clauses in constructors.
+Validation happens at the system boundary, in Api, with the domain additionally enforcing its own invariants through guard clauses in constructors.
 
 | Input | Rule | Failure |
 |---|---|---|
@@ -785,7 +785,7 @@ Options bound with `IOptions<T>` and validated on startup, so a bad configuratio
 | **Property** | Determinism, meaning same seed and N yields identical output; empty stays empty; `GenerationAt` is pure | FsCheck |
 | **Integration** | EF Core against real SQLite, including a crash simulation: write, dispose the context, recreate, read back | xUnit and SQLite |
 | **Functional** | Full HTTP through the real pipeline: status codes, ProblemDetails shape, `ETag` and `304`, `Location` header | `WebApplicationFactory` |
-| **Architecture** | Dependency rule enforced: `Core` references nothing, and no EF Core outside Infrastructure | NetArchTest |
+| **Architecture** | Dependency rule enforced: `Domain` references nothing, and no EF Core outside Infrastructure | NetArchTest |
 
 The crash-simulation test is the one that actually proves the durability requirement. Asserting it against an in-memory provider would prove nothing, which is why [§7.3](#73-store-choice) rules that provider out.
 

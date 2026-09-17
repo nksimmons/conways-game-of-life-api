@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_DB: gameoflife
+      POSTGRES_USER: gameoflife
+      POSTGRES_PASSWORD: gameoflife
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gameoflife -d gameoflife"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

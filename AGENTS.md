@@ -13,17 +13,17 @@ Operating rules for AI agents working in this repository.
 Dependencies point **inward only**.
 
 ```
-Web  ->  UseCases  ->  Core  <-  Infrastructure
+Api  ->  Application  ->  Domain  <-  Infrastructure
 ```
 
 | Project | May reference | Must never reference |
 |---|---|---|
-| `Core` | **Nothing** | EF Core, ASP.NET Core, any I/O, any NuGet infrastructure package |
-| `UseCases` | `Core` | `Infrastructure`, `Web`, EF Core, `HttpContext` |
-| `Infrastructure` | `Core` | `Web`, `UseCases` |
-| `Web` | `Core`, `UseCases`, `Infrastructure` | (nothing further) |
+| `Domain` | **Nothing** | EF Core, ASP.NET Core, any I/O, any NuGet infrastructure package |
+| `Application` | `Domain` | `Infrastructure`, `Api`, EF Core, `HttpContext` |
+| `Infrastructure` | `Domain` | `Api`, `Application` |
+| `Api` | `Domain`, `Application`, `Infrastructure` | (nothing further) |
 
-The single inward-violating reference (`Web -> Infrastructure`) exists **only** so the composition root can register implementations. No Web code may call an Infrastructure type directly; it may only name them inside DI registration.
+The single inward-violating reference (`Api -> Infrastructure`) exists **only** so the composition root can register implementations. No Api code may call an Infrastructure type directly; it may only name them inside DI registration.
 
 ### 1.2 This is verified, not trusted
 
@@ -31,20 +31,28 @@ Architecture tests assert the dependency rule. If you add a project reference th
 
 ### 1.3 Layer responsibilities
 
-- **`Core`**: entities, value objects, domain services, rules, and ports (interfaces). Pure C# and BCL types only. Must remain unit-testable with no mocks, no fixtures, and no host.
-- **`UseCases`**: command and query handlers that orchestrate domain objects and ports. Returns `Result<T>`. Contains no SQL, no HTTP, no serialization.
-- **`Infrastructure`**: adapters implementing Core ports. The only project that knows a database exists.
-- **`Web`**: controllers, serialization, middleware, composition root. Translates `Result<T>` into HTTP. Contains no business logic.
+- **`Domain`**: entities, value objects, domain services, rules, and ports (interfaces). Pure C# and BCL types only. Must remain unit-testable with no mocks, no fixtures, and no host.
+- **`Application`**: command and query handlers that orchestrate domain objects and ports. Returns `Result<T>`. Contains no SQL, no HTTP, no serialization.
+- **`Infrastructure`**: adapters implementing Domain ports. The only project that knows a database exists.
+- **`Api`**: controllers, serialization, middleware, composition root. Translates `Result<T>` into HTTP. Contains no business logic.
+
+### 1.4 Use-case organization
+
+- A command or query and its handler implement exactly one use case. Do not introduce application services that accumulate unrelated methods.
+- Organize Application code by feature. Keep a use case's command or query, handler, and application-facing response model together in its feature directory.
+- Put business rules and state transitions on Domain entities, value objects, or domain services. Application handlers coordinate those objects and ports; they must not reconstruct domain behavior themselves.
+- Treat Infrastructure as a replaceable plugin. Its adapters implement Domain ports, and its DI extension is the only place it is named by the Api composition root.
+- Keep Api endpoints transport-only: bind and validate input, invoke one handler, and translate its `Result<T>` to HTTP. Do not inject `DbContext`, repositories, or Infrastructure implementations into controllers.
 
 Controllers stay thin. A controller binds and validates the request, calls a handler, and maps the `Result<T>` onto a status code. If a controller grows a third responsibility, the logic belongs in a handler.
 
-**There is no mediator library.** Dispatch is four interfaces in `UseCases`: `ICommand`, `IQuery<TResult>`, `ICommandHandler<TCommand>`, and `IQueryHandler<TQuery, TResult>`. Controllers inject the closed generics they need. Do not add MediatR or an equivalent to tidy up constructors; [docs/design.md §9.1](docs/design.md) records why, which alternatives were weighed, and what would justify reversing it.
+**There is no mediator library.** Dispatch is four interfaces in `Application`: `ICommand`, `IQuery<TResult>`, `ICommandHandler<TCommand>`, and `IQueryHandler<TQuery, TResult>`. Controllers inject the closed generics they need. Do not add MediatR or an equivalent to tidy up constructors; [docs/design.md §9.1](docs/design.md) records why, which alternatives were weighed, and what would justify reversing it.
 
 Do not build a reflective `Send`. In particular, never use `Activator.CreateInstance` to resolve a handler: it bypasses dependency injection, defers missing-registration failures from startup to request time, and discards the generic constraint tying a query to its result type. Register handlers explicitly and enable `ServiceProviderOptions.ValidateOnBuild` so a missing registration fails the process at boot rather than on first request.
 
-### 1.4 Ports, not wrappers
+### 1.5 Ports, not wrappers
 
-Interfaces in `Core` are **ports expressed in domain terms**.
+Interfaces in `Domain` are **ports expressed in domain terms**.
 
 ```csharp
 // CORRECT: domain vocabulary, no persistence concepts leak out
@@ -62,9 +70,9 @@ Never do any of the following:
 - Define a generic `IRepository<T>` that forwards to `DbSet<T>`. **EF Core is already a repository and unit of work.** Wrapping it adds indirection and leaks the persistence model upward.
 - Surface `SaveChanges` / `SaveChangesAsync` as a port method.
 
-### 1.5 Domain purity
+### 1.6 Domain purity
 
-`Core` must have zero infrastructure dependencies. Specifically, no EF Core attributes, no `[JsonPropertyName]`, no `DbContext` awareness, no `IServiceProvider`. Persistence mapping belongs in Infrastructure (`IEntityTypeConfiguration<T>`); serialization shaping belongs in Web DTOs.
+`Domain` must have zero infrastructure dependencies. Specifically, no EF Core attributes, no `[JsonPropertyName]`, no `DbContext` awareness, no `IServiceProvider`. Persistence mapping belongs in Infrastructure (`IEntityTypeConfiguration<T>`); serialization shaping belongs in Api DTOs.
 
 Domain objects validate their own invariants in constructors via guard clauses. An instance that exists is always valid.
 
@@ -72,7 +80,7 @@ Domain objects validate their own invariants in constructors via guard clauses. 
 
 ## 2. Domain rules specific to this project
 
-- **Use the Life literature's vocabulary, not the exercise's.** The aggregate is a `Universe`; its initial arrangement is the `Seed`; any arrangement of cells is a `Pattern`; the edge behaviour is `ITopology`; what a pattern eventually does is its `Fate`. "Board" is the exercise's word and appears only in HTTP routes, DTOs, and ProblemDetails. Do not introduce it into `Core` or `UseCases`, and do not invent friendlier synonyms ("experiment", "launch pattern", "boundary") for terms the literature already has. [docs/design.md §1.3](docs/design.md) is the reference.
+- **Use the Life literature's vocabulary, not the exercise's.** The aggregate is a `Universe`; its initial arrangement is the `Seed`; any arrangement of cells is a `Pattern`; the edge behaviour is `ITopology`; what a pattern eventually does is its `Fate`. "Board" is the exercise's word and appears only in HTTP routes, DTOs, and ProblemDetails. Do not introduce it into `Domain` or `Application`, and do not invent friendlier synonyms ("experiment", "launch pattern", "boundary") for terms the literature already has. [docs/design.md §1.3](docs/design.md) is the reference.
 - **Spaceship, glider, still life, and oscillator are observations, not fields.** They classify behaviour discovered by generating. Never add an `IsSpaceship` or `PatternKind` property to the model. They belong in tests and in response metadata derived from `Fate`, nowhere else.
 - The **universe is an immutable seed.** Generations are computed, never stored. Do not add a "current generation" field or an `Advance()` method that mutates state. This single property underpins the caching, concurrency, and durability design, and breaking it invalidates all three.
 - Generation *N* must be a **pure function** of the seed, rule, topology, and *N*. No clock, no randomness, no ambient state.
@@ -94,7 +102,7 @@ Domain objects validate their own invariants in constructors via guard clauses. 
 - Do not queue per-request work onto the thread pool. Never `Task.Run` in a request path.
 - Thread `CancellationToken` through **every** async call and every long-running loop. In endpoints it originates from `HttpContext.RequestAborted`. A cancelled request must stop consuming CPU promptly.
 - Never call `.Result`, `.Wait()`, or `.GetAwaiter().GetResult()`.
-- Use `ConfigureAwait(false)` in `Core`, `UseCases`, and `Infrastructure`. It is unnecessary in `Web`.
+- Use `ConfigureAwait(false)` in `Domain`, `Application`, and `Infrastructure`. It is unnecessary in `Api`.
 - Prefer `ValueTask` only where a hot path demonstrably allocates; default to `Task`.
 
 ### 3.2 Concurrency
@@ -128,7 +136,7 @@ Bound concurrency explicitly, since unbounded parallelism is a defect. Use `Sema
 
 ### 3.5 Validation and input safety
 
-Validate at the **system boundary** (Web). Do not add defensive validation to internal methods for conditions that cannot occur.
+Validate at the **system boundary** (Api). Do not add defensive validation to internal methods for conditions that cannot occur.
 
 Every one of these must be enforced and tested:
 
@@ -227,7 +235,7 @@ The design document is the most-read artifact here, so prose quality is part of 
 ```bash
 dotnet build                      # warnings are errors
 dotnet test                       # all suites
-dotnet run --project src/*.Web    # SQLite file is created on first run
+dotnet run --project src/*.Api    # SQLite file is created on first run
 dotnet format --verify-no-changes # style gate
 ```
 
