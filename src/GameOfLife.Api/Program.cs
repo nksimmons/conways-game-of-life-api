@@ -9,6 +9,8 @@ using GameOfLife.Api.Controllers;
 using GameOfLife.Api.ErrorHandling;
 using GameOfLife.Api.Options;
 using GameOfLife.Api.Swagger;
+using GameOfLife.Api.Validation;
+using FluentValidation;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -36,6 +38,20 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
     .WriteTo.Console(new JsonFormatter()));
 
 builder.Services.AddControllers().AddControllersAsServices();
+
+// Model binding failures and FluentValidation failures both become this one RFC 7807 body. The
+// factory also strips the binder's default text, which names CLR types and JSON byte offsets.
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+    options.InvalidModelStateResponseFactory = context =>
+        new BadRequestObjectResult(ValidationProblems.Create(context.ModelState))
+        {
+            ContentTypes = { "application/problem+json" },
+        });
+
+// Validators are invoked explicitly by the controller. FluentValidation deprecated its MVC
+// auto-validation pipeline and ships no filter replacement, so registration is all that is wired here.
+builder.Services.AddValidatorsFromAssemblyContaining<UploadBoardRequestValidator>();
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options => options.OperationFilter<GliderExampleOperationFilter>());
 

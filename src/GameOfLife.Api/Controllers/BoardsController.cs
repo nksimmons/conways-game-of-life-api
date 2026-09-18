@@ -9,6 +9,7 @@ using GameOfLife.Api.Contracts;
 using GameOfLife.Api.Mapping;
 using GameOfLife.Api.Options;
 using GameOfLife.Api.Validation;
+using FluentValidation;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Routing;
@@ -31,6 +32,7 @@ public sealed class BoardsController : ControllerBase
     private readonly IQueryHandler<GetUniverseQuery, UniverseView> _getUniverseHandler;
     private readonly IQueryHandler<GetGenerationQuery, PatternView> _getGenerationHandler;
     private readonly IQueryHandler<GetFinalStateQuery, FinalStateView> _getFinalStateHandler;
+    private readonly IValidator<UploadBoardRequest> _uploadValidator;
     private readonly LinkGenerator _linkGenerator;
     private readonly GameOfLifeOptions _options;
 
@@ -39,6 +41,7 @@ public sealed class BoardsController : ControllerBase
         IQueryHandler<GetUniverseQuery, UniverseView> getUniverseHandler,
         IQueryHandler<GetGenerationQuery, PatternView> getGenerationHandler,
         IQueryHandler<GetFinalStateQuery, FinalStateView> getFinalStateHandler,
+        IValidator<UploadBoardRequest> uploadValidator,
         LinkGenerator linkGenerator,
         IOptions<GameOfLifeOptions> options)
     {
@@ -46,6 +49,7 @@ public sealed class BoardsController : ControllerBase
         _getUniverseHandler = getUniverseHandler;
         _getGenerationHandler = getGenerationHandler;
         _getFinalStateHandler = getFinalStateHandler;
+        _uploadValidator = uploadValidator;
         _linkGenerator = linkGenerator;
         _options = options.Value;
     }
@@ -56,18 +60,16 @@ public sealed class BoardsController : ControllerBase
     [RequestSizeLimit(1_048_576)]
     public async Task<IActionResult> CreateBoard([FromBody] UploadBoardRequest? request, CancellationToken ct)
     {
-        if (request?.Cells is not { } cells)
+        // Invoked here rather than by a filter. FluentValidation deprecated its MVC auto-validation
+        // pipeline and does not ship a filter replacement, and AGENTS.md §1.3 puts binding and
+        // validating in the controller anyway, so the explicit call is both supported and expected.
+        var validation = await _uploadValidator.ValidateAsync(request ?? new UploadBoardRequest(null), ct);
+        if (!validation.IsValid)
         {
-            return InvalidRequestProblem(new[] { BoardRequestValidator.MissingCellsError });
+            return BadRequest(ValidationProblems.Create(validation.ToDictionary()));
         }
 
-        var errors = BoardRequestValidator.ValidateCells(cells, _options);
-        if (errors.Count > 0)
-        {
-            return InvalidRequestProblem(errors);
-        }
-
-        var seed = Pattern.FromRows(cells);
+        var seed = Pattern.FromRows(request!.Cells!);
         var id = UniverseId.NewId();
 
         await _createHandler.HandleAsync(new CreateUniverseCommand(id, seed), ct);
@@ -103,10 +105,16 @@ public sealed class BoardsController : ControllerBase
     [EnableRateLimiting(EvaluationPolicy)]
     public async Task<IActionResult> GetGeneration(Guid id, int n, CancellationToken ct)
     {
-        var errors = BoardRequestValidator.ValidateGeneration(n, _options);
-        return errors.Count > 0
-            ? InvalidRequestProblem(errors)
-            : await GenerationAsync(id, n, ct);
+        // A single scalar bound from the route, so a validator class would be more ceremony than rule.
+        if (n < 0 || n > _options.MaxGenerationsAhead)
+        {
+            return BadRequest(ValidationProblems.Create(new Dictionary<string, string[]>
+            {
+                ["n"] = new[] { $"n must be between 0 and {_options.MaxGenerationsAhead}." },
+            }));
+        }
+
+        return await GenerationAsync(id, n, ct);
     }
 
     [HttpGet("{id:guid}/next", Name = "GetNextGeneration")]
@@ -233,16 +241,4 @@ public sealed class BoardsController : ControllerBase
         Status = StatusCodes.Status404NotFound,
         Detail = $"No board exists with id '{id}'.",
     });
-
-    private static IActionResult InvalidRequestProblem(IReadOnlyList<string> errors)
-    {
-        var problemDetails = new ValidationProblemDetails
-        {
-            Type = "https://gameoflife.example/problems/invalid-request",
-            Title = "The request is invalid.",
-            Status = StatusCodes.Status400BadRequest,
-        };
-        problemDetails.Errors["request"] = errors.ToArray();
-        return new BadRequestObjectResult(problemDetails);
-    }
 }

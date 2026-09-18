@@ -136,7 +136,9 @@ Bound concurrency explicitly, since unbounded parallelism is a defect. Admission
 
 ### 3.5 Validation and input safety
 
-Validate at the **system boundary** (Api). Do not add defensive validation to internal methods for conditions that cannot occur.
+Validate at the **system boundary** (Api), using the FluentValidation validator in `Api/Validation`, invoked explicitly by the controller. Do not reintroduce auto-validation via a filter or the deprecated `FluentValidation.AspNetCore` pipeline; [docs/design.md §10.5](docs/design.md) records why. Do not add defensive validation to internal methods for conditions that cannot occur.
+
+Every `400`, whether it originates in model binding or in a validation rule, must be built by `ValidationProblems` so there is exactly one problem shape. Never echo a model-binder or serializer message into a response body: those name CLR types and byte offsets.
 
 Every one of these must be enforced and tested:
 

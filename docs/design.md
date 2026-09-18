@@ -710,6 +710,7 @@ A recurring failure mode in design documents is stating a library choice as thou
 | Topology | Strategy, not hard-coded | `BoundedTopology` | A toroidal requirement |
 | Admission | Bounded concurrency with explicit rejection | A named ASP.NET Core rate-limiter concurrency policy | Queue-based backpressure |
 | Evaluation location | Behind a request abstraction | In-process and synchronous | `final` outgrowing request/response ([§8.3](#83-service-boundaries)) |
+| Input validation | Rejected at the boundary, in terms the caller can act on | FluentValidation, invoked explicitly | Rules simple enough for DataAnnotations, or caps ceasing to be configurable |
 | Telemetry | Vendor-neutral instrumentation | OpenTelemetry and Serilog | An exporter change, nothing more |
 
 ### 9.1 Use-case dispatch: no library
@@ -803,7 +804,7 @@ Each row has a trigger rather than a date. I'd rather add a pattern when somethi
 
 ### 10.1 Validation and input bounds
 
-Validation happens at the system boundary, in Api, with the domain additionally enforcing its own invariants through guard clauses in constructors.
+Validation happens at the system boundary, in Api, with the domain additionally enforcing its own invariants through guard clauses in constructors. The boundary rules are expressed as a FluentValidation validator; [§10.5](#105-validation-probed-rather-than-assumed) covers why a library rather than DataAnnotations, and why it is invoked explicitly.
 
 | Input | Rule | Failure |
 |---|---|---|
@@ -901,6 +902,18 @@ The boundary rules in [§10.1](#101-validation-and-input-bounds) are enumerated 
 All 34 returned the intended status, and every error carried `application/problem+json`. Three of those are worth naming because they are handled by the framework rather than by any code in this repository, which is the sort of thing that is easy to claim and easy to get wrong: the oversized body is refused with `413` before model binding by the `RequestSizeLimit` on the action, the nesting bomb is refused with `400` by `System.Text.Json`'s default 64-level depth limit, and a missing or wrong `Content-Type` is `415` from content negotiation.
 
 The probes live in `bench/probe.py` rather than in the functional suite, because they assert against a process under real load and the timing subcommands take minutes. `python3 bench/probe.py validate` exits non-zero on any mismatch, so it can gate a pipeline; the behaviours worth protecting from regression on every commit are already duplicated as fast functional tests.
+
+#### One pipeline, one problem shape
+
+Running those probes turned up something the status codes alone had hidden. Two mechanisms were producing `400`s: ASP.NET's model binding, which fails before an action runs, and a hand-written static validator the controller called. They disagreed about everything except the status code. Binding failures carried `type: https://tools.ietf.org/html/rfc9110#section-15.5.1`, the title "One or more validation errors occurred.", a `traceId`, and errors keyed by JSON path. Rule failures carried a `gameoflife.example` type, a different title, no `traceId`, and every message under a single `request` key. A client cannot handle those uniformly, which defeats the point of using a standard error format.
+
+Worse, the binding path echoed the serialiser's own words: "The JSON value could not be converted to System.Int32. Path: $.cells[0][0] | LineNumber: 0 | BytePositionInLine: 14." That names a CLR type and a byte offset, which is exactly the internal detail [§10.2](#102-error-handling) says does not cross the boundary. It had been there from the start, and no test caught it because every test asserted the status code and the media type rather than the body.
+
+Validation rules now live in a FluentValidation `AbstractValidator`, and both paths are funnelled through one factory that builds the body and replaces the binder's text with a neutral message. The dictionary key already names the offending field, so nothing is lost by refusing to repeat the serialiser's explanation.
+
+The library earns its place by taking a constructor. The caps are configurable ([§10.4](#104-configuration)), and DataAnnotations attribute arguments must be compile-time constants, so `[MaxLength(options.MaxWidth)]` cannot be written. The built-in escape hatch, `IValidatableObject`, reaches the configured values through `ValidationContext.GetService`, which is service location. FluentValidation takes `IOptions<GameOfLifeOptions>` in its constructor like anything else, and that is the whole reason it is here.
+
+One deliberate omission: validation is invoked explicitly in the controller rather than by a filter. FluentValidation deprecated its MVC auto-validation pipeline, which is not asynchronous and works only with controllers, and it ships no replacement filter, pointing instead at a third-party package. Writing that filter here would be re-creating the "magic" the library moved away from, to save one line per action. AGENTS.md §1.3 already describes a controller as the thing that binds and validates, so the explicit call is also what the architecture asks for.
 
 ---
 
@@ -1002,6 +1015,7 @@ One note in case checkpointing ever returns. DynamoDB handles it well: a sort ke
 | 012 | Async posture | Synchronous CPU core, async I/O, a named rate-limiter concurrency policy for admission. A hand-rolled `SemaphoreSlim` gate did this first and was removed as duplication ([§8.4](#84-concurrency-and-cpu-admission)) |
 | 013 | Caching | `ETag` and `immutable`, valid by construction. The validator is derived from board id and generation, not from a content hash, so a conditional request skips the evolution loop instead of paying for it ([§5.5](#55-caching)) |
 | 014 | Versioning | URL segment from day one |
+| 019 | Validation | FluentValidation at the boundary, invoked explicitly rather than by a filter, because the caps are configurable and DataAnnotations arguments must be constants. Binding and rule failures share one RFC 7807 body ([§10.5](#105-validation-probed-rather-than-assumed)) |
 | 015 | Service boundaries | One deployable. `final` splits first, and only on a stated trigger |
 | 016 | Use-case dispatch | Hand-rolled command and query handler interfaces, injected as closed generics. No mediator library; Wolverine named as successor at the `final` split |
 | 017 | Ubiquitous language | Domain uses the Life literature's vocabulary (universe, seed, pattern, generation, rule, topology, fate). "Board" is the exercise's word, translated at the web boundary. Exactly one bounded-context seam today; a pattern catalogue named as the plausible second ([§1.3](#13-modelling-the-domain)) |

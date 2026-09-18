@@ -87,6 +87,42 @@ public sealed class BoardsControllerTests : IClassFixture<GameOfLifeApiFactory>
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
     }
 
+    /// <summary>
+    /// Model binding and FluentValidation both produce 400s, and they used to produce different
+    /// bodies: different type URIs, titles, and error keys for the same class of failure.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"cells":[["a"]]}""")] // fails during model binding
+    [InlineData("""{"cells":[[0,1],[0]]}""")] // fails a validation rule
+    public async Task Invalid_requests_share_one_problem_shape(string json)
+    {
+        using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        var response = await _client.PostAsync("/api/v1/boards", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "https://gameoflife.example/problems/invalid-request",
+            document.RootElement.GetProperty("type").GetString());
+        Assert.Equal("The request is invalid.", document.RootElement.GetProperty("title").GetString());
+        Assert.True(document.RootElement.TryGetProperty("errors", out _));
+    }
+
+    [Fact]
+    public async Task A_binding_failure_does_not_leak_framework_internals()
+    {
+        using var content = new StringContent("""{"cells":[["a"]]}""", System.Text.Encoding.UTF8, "application/json");
+        var response = await _client.PostAsync("/api/v1/boards", content);
+
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.DoesNotContain("System.", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("BytePositionInLine", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("LineNumber", body, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task GetBoard_returns_the_seed_that_was_uploaded()
     {
