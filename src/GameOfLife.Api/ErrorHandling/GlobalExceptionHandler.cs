@@ -1,16 +1,11 @@
 using Microsoft.AspNetCore.Diagnostics;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 
 namespace GameOfLife.Api.ErrorHandling;
 
 /// <summary>Turns anything a controller didn't anticipate into ProblemDetails, never a stack trace.</summary>
-public sealed class GlobalExceptionHandler : IExceptionHandler
+public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IExceptionHandler
 {
-    private readonly ILogger<GlobalExceptionHandler> _logger;
-
-    public GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) => _logger = logger;
-
     public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken ct)
     {
         if (exception is OperationCanceledException)
@@ -33,7 +28,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
             return true;
         }
 
-        _logger.LogError(
+        logger.LogError(
             exception,
             "Unhandled exception processing {Method} {Path}",
             httpContext.Request.Method,

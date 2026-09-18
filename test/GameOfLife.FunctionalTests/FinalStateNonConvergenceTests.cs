@@ -11,13 +11,12 @@ namespace GameOfLife.FunctionalTests;
 /// (Acorn included) settle well inside 5000 generations, so the default budget cannot be exceeded by a
 /// legitimately sized input; a small budget is the honest way to reach this path.
 /// </summary>
-public sealed class FinalStateNonConvergenceTests : IClassFixture<FinalStateNonConvergenceTests.LowBudgetFactory>
+public sealed class FinalStateNonConvergenceTests(FinalStateNonConvergenceTests.LowBudgetFactory factory)
+    : IClassFixture<FinalStateNonConvergenceTests.LowBudgetFactory>
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly HttpClient _client;
-
-    public FinalStateNonConvergenceTests(LowBudgetFactory factory) => _client = factory.CreateClient();
+    private readonly HttpClient _client = factory.CreateClient();
 
     public sealed class LowBudgetFactory : GameOfLifeApiFactory
     {

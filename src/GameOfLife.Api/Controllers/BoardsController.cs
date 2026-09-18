@@ -12,7 +12,6 @@ using GameOfLife.Api.Validation;
 using FluentValidation;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Options;
 
 namespace GameOfLife.Api.Controllers;
@@ -23,56 +22,42 @@ namespace GameOfLife.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/v1/boards")]
-public sealed class BoardsController : ControllerBase
+public sealed class BoardsController(
+    ICommandHandler<CreateUniverseCommand> createHandler,
+    IQueryHandler<GetUniverseQuery, UniverseView> getUniverseHandler,
+    IQueryHandler<GetGenerationQuery, PatternView> getGenerationHandler,
+    IQueryHandler<GetFinalStateQuery, FinalStateView> getFinalStateHandler,
+    IValidator<UploadBoardRequest> uploadValidator,
+    LinkGenerator linkGenerator,
+    IOptions<GameOfLifeOptions> options)
+    : ControllerBase
 {
     /// <summary>Applied to the three endpoints that run the evolution loop; configured in Program.cs.</summary>
     public const string EvaluationPolicy = "evaluation";
 
-    private readonly ICommandHandler<CreateUniverseCommand> _createHandler;
-    private readonly IQueryHandler<GetUniverseQuery, UniverseView> _getUniverseHandler;
-    private readonly IQueryHandler<GetGenerationQuery, PatternView> _getGenerationHandler;
-    private readonly IQueryHandler<GetFinalStateQuery, FinalStateView> _getFinalStateHandler;
-    private readonly IValidator<UploadBoardRequest> _uploadValidator;
-    private readonly LinkGenerator _linkGenerator;
-    private readonly GameOfLifeOptions _options;
-
-    public BoardsController(
-        ICommandHandler<CreateUniverseCommand> createHandler,
-        IQueryHandler<GetUniverseQuery, UniverseView> getUniverseHandler,
-        IQueryHandler<GetGenerationQuery, PatternView> getGenerationHandler,
-        IQueryHandler<GetFinalStateQuery, FinalStateView> getFinalStateHandler,
-        IValidator<UploadBoardRequest> uploadValidator,
-        LinkGenerator linkGenerator,
-        IOptions<GameOfLifeOptions> options)
-    {
-        _createHandler = createHandler;
-        _getUniverseHandler = getUniverseHandler;
-        _getGenerationHandler = getGenerationHandler;
-        _getFinalStateHandler = getFinalStateHandler;
-        _uploadValidator = uploadValidator;
-        _linkGenerator = linkGenerator;
-        _options = options.Value;
-    }
+    private readonly GameOfLifeOptions _options = options.Value;
 
     [HttpPost]
     // A cheap pre-parse guard only: a pretty-printed 256x256 board is roughly 580 KB of JSON, so 1 MB
     // leaves headroom. The authoritative cap is the cell count, which can only be checked after parsing.
     [RequestSizeLimit(1_048_576)]
-    public async Task<IActionResult> CreateBoard([FromBody] UploadBoardRequest? request, CancellationToken ct)
+    public async Task<IActionResult> CreateBoard([FromBody] UploadBoardRequest board, CancellationToken ct)
     {
         // Invoked here rather than by a filter. FluentValidation deprecated its MVC auto-validation
         // pipeline and does not ship a filter replacement, and AGENTS.md §1.3 puts binding and
         // validating in the controller anyway, so the explicit call is both supported and expected.
-        var validation = await _uploadValidator.ValidateAsync(request ?? new UploadBoardRequest(null), ct);
+        // A null or absent body never reaches this point: the parameter is non-nullable, so MVC
+        // rejects one during binding and the same factory shapes that response.
+        var validation = await uploadValidator.ValidateAsync(board, ct);
         if (!validation.IsValid)
         {
             return BadRequest(ValidationProblems.Create(validation.ToDictionary()));
         }
 
-        var seed = Pattern.FromRows(request!.Cells!);
+        var seed = Pattern.FromRows(board.Cells);
         var id = UniverseId.NewId();
 
-        await _createHandler.HandleAsync(new CreateUniverseCommand(id, seed), ct);
+        await createHandler.HandleAsync(new CreateUniverseCommand(id, seed), ct);
 
         var response = new BoardCreatedResponse(id.ToString(), seed.Width, seed.Height, seed.Population, BuildBoardLinks(id.Value));
         return CreatedAtRoute("GetBoard", new { id = id.Value }, response);
@@ -81,7 +66,7 @@ public sealed class BoardsController : ControllerBase
     [HttpGet("{id:guid}", Name = "GetBoard")]
     public async Task<IActionResult> GetBoard(Guid id, CancellationToken ct)
     {
-        var result = await _getUniverseHandler.HandleAsync(new GetUniverseQuery(new UniverseId(id)), ct);
+        var result = await getUniverseHandler.HandleAsync(new GetUniverseQuery(new UniverseId(id)), ct);
         if (result.Status == ResultStatus.NotFound)
         {
             return BoardNotFoundProblem(id);
@@ -110,7 +95,7 @@ public sealed class BoardsController : ControllerBase
         {
             return BadRequest(ValidationProblems.Create(new Dictionary<string, string[]>
             {
-                ["n"] = new[] { $"n must be between 0 and {_options.MaxGenerationsAhead}." },
+                ["n"] = [$"n must be between 0 and {_options.MaxGenerationsAhead}."],
             }));
         }
 
@@ -126,7 +111,7 @@ public sealed class BoardsController : ControllerBase
     public async Task<IActionResult> GetFinalState(Guid id, CancellationToken ct)
     {
         var query = new GetFinalStateQuery(new UniverseId(id), _options.FinalStateIterationBudget);
-        var result = await _getFinalStateHandler.HandleAsync(query, ct);
+        var result = await getFinalStateHandler.HandleAsync(query, ct);
         if (result.Status == ResultStatus.NotFound)
         {
             return BoardNotFoundProblem(id);
@@ -171,7 +156,7 @@ public sealed class BoardsController : ControllerBase
         {
             // Still confirm the board exists, so a fabricated validator gets a 404 rather than a
             // spurious 304. This is a point lookup, not an evolution.
-            var known = await _getUniverseHandler.HandleAsync(new GetUniverseQuery(new UniverseId(id)), ct);
+            var known = await getUniverseHandler.HandleAsync(new GetUniverseQuery(new UniverseId(id)), ct);
             if (known.Status == ResultStatus.NotFound)
             {
                 return BoardNotFoundProblem(id);
@@ -181,7 +166,7 @@ public sealed class BoardsController : ControllerBase
             return StatusCode(StatusCodes.Status304NotModified);
         }
 
-        var result = await _getGenerationHandler.HandleAsync(new GetGenerationQuery(new UniverseId(id), generation), ct);
+        var result = await getGenerationHandler.HandleAsync(new GetGenerationQuery(new UniverseId(id), generation), ct);
         if (result.Status == ResultStatus.NotFound)
         {
             return BoardNotFoundProblem(id);
@@ -231,7 +216,7 @@ public sealed class BoardsController : ControllerBase
 
     // Links come from route templates only; a null here means a route name is wrong, which is a bug to surface, not a link to omit.
     private string Link(string routeName, object values) =>
-        _linkGenerator.GetPathByName(HttpContext, routeName, values)
+        linkGenerator.GetPathByName(HttpContext, routeName, values)
         ?? throw new InvalidOperationException($"Route '{routeName}' is not registered.");
 
     private static IActionResult BoardNotFoundProblem(Guid id) => new NotFoundObjectResult(new ProblemDetails

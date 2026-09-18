@@ -36,11 +36,15 @@ public static class ValidationProblems
     /// <summary>Converts model-binding failures, replacing the binder's internals-bearing text.</summary>
     public static ValidationProblemDetails Create(ModelStateDictionary modelState)
     {
+        // Model binding reports a missing body under an empty key, which is not something a client can
+        // act on, and normalising it can collide with an existing key, so the messages are grouped.
         var errors = modelState
             .Where(entry => entry.Value is { Errors.Count: > 0 })
+            .GroupBy(entry => string.IsNullOrEmpty(entry.Key) ? "body" : entry.Key, StringComparer.Ordinal)
             .ToDictionary(
-                entry => entry.Key,
-                entry => entry.Value!.Errors.Select(Describe).Distinct().ToArray());
+                group => group.Key,
+                group => group.SelectMany(entry => entry.Value!.Errors.Select(Describe)).Distinct().ToArray(),
+                StringComparer.Ordinal);
 
         return Create(errors);
     }

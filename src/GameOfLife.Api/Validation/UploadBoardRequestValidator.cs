@@ -19,13 +19,18 @@ public sealed class UploadBoardRequestValidator : AbstractValidator<UploadBoardR
         // Cascade.Stop because the later rules index into the grid: without a non-empty rectangle
         // there is nothing coherent to report on, and reporting "rows must be non-empty" alongside
         // "must not exceed 256x256" for the same empty array is noise rather than help.
+        //
+        // NotNull is kept as a runtime guard even though Cells is non-nullable. MVC rejects a null or
+        // absent cells before this runs, but only because non-nullable reference types are implicitly
+        // required; that inference can be switched off in MvcOptions, and the rules below index into
+        // the array.
         RuleFor(request => request.Cells)
             .Cascade(CascadeMode.Stop)
             .NotNull()
             .WithMessage("cells must be a non-empty 2D array.")
-            .Must(cells => cells!.Length > 0)
+            .Must(cells => cells.Length > 0)
             .WithMessage("cells must be a non-empty 2D array.")
-            .Must(cells => (cells![0]?.Length ?? 0) > 0)
+            .Must(cells => (cells[0]?.Length ?? 0) > 0)
             .WithMessage("cells rows must be non-empty.")
             .DependentRules(() =>
             {
@@ -38,21 +43,21 @@ public sealed class UploadBoardRequestValidator : AbstractValidator<UploadBoardR
                     .WithMessage("cell values must be 0 or 1.");
 
                 RuleFor(request => request.Cells)
-                    .Must(cells => cells![0]!.Length <= caps.MaxWidth && cells.Length <= caps.MaxHeight)
+                    .Must(cells => cells[0].Length <= caps.MaxWidth && cells.Length <= caps.MaxHeight)
                     .WithMessage($"board dimensions must not exceed {caps.MaxWidth}x{caps.MaxHeight}.");
 
                 RuleFor(request => request.Cells)
-                    .Must(cells => (long)cells![0]!.Length * cells.Length <= caps.MaxCells)
+                    .Must(cells => (long)cells[0].Length * cells.Length <= caps.MaxCells)
                     .WithMessage($"board must not contain more than {caps.MaxCells} cells.");
             });
     }
 
-    private static bool BeRectangular(int[][]? cells)
+    private static bool BeRectangular(int[][] cells)
     {
-        var width = cells![0]!.Length;
+        var width = cells[0].Length;
         return Array.TrueForAll(cells, row => row is not null && row.Length == width);
     }
 
-    private static bool HoldOnlyBinaryValues(int[][]? cells) =>
-        Array.TrueForAll(cells!, row => row is null || Array.TrueForAll(row, value => value is 0 or 1));
+    private static bool HoldOnlyBinaryValues(int[][] cells) =>
+        Array.TrueForAll(cells, row => row is null || Array.TrueForAll(row, value => value is 0 or 1));
 }

@@ -74,5 +74,5 @@ public sealed class DependencyRuleTests
     private static string Describe(TestResult result) =>
         result.IsSuccessful
             ? string.Empty
-            : "Failing types: " + string.Join(", ", result.FailingTypeNames ?? Array.Empty<string>());
+            : "Failing types: " + string.Join(", ", result.FailingTypeNames ?? []);
 }

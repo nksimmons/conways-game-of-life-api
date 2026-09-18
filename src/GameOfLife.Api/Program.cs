@@ -72,7 +72,7 @@ builder.Services.AddScoped<IQueryHandler<GetFinalStateQuery, FinalStateView>, Ge
 builder.Services.AddInfrastructure(builder.Configuration);
 
 builder.Services.AddHealthChecks()
-    .AddCheck("self", () => HealthCheckResult.Healthy(), tags: new[] { "live" });
+    .AddCheck("self", () => HealthCheckResult.Healthy(), tags: ["live"]);
 
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();

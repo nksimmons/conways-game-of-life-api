@@ -2,13 +2,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace GameOfLife.Infrastructure.Persistence;
 
-public sealed class GameOfLifeDbContext : DbContext
+public sealed class GameOfLifeDbContext(DbContextOptions<GameOfLifeDbContext> options) : DbContext(options)
 {
-    public GameOfLifeDbContext(DbContextOptions<GameOfLifeDbContext> options)
-        : base(options)
-    {
-    }
-
     internal DbSet<UniverseRecord> Universes => Set<UniverseRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

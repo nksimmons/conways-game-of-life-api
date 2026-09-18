@@ -5,15 +5,12 @@ using GameOfLife.Domain.Observability;
 
 namespace GameOfLife.Application.GetFinalState;
 
-public sealed class GetFinalStateQueryHandler : IQueryHandler<GetFinalStateQuery, FinalStateView>
+public sealed class GetFinalStateQueryHandler(IUniverseRepository repository)
+    : IQueryHandler<GetFinalStateQuery, FinalStateView>
 {
-    private readonly IUniverseRepository _repository;
-
-    public GetFinalStateQueryHandler(IUniverseRepository repository) => _repository = repository;
-
     public async Task<Result<FinalStateView>> HandleAsync(GetFinalStateQuery query, CancellationToken ct)
     {
-        var universe = await _repository.FindAsync(query.Id, ct).ConfigureAwait(false);
+        var universe = await repository.FindAsync(query.Id, ct).ConfigureAwait(false);
         if (universe is null)
         {
             return Result<FinalStateView>.NotFound();

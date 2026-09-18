@@ -29,8 +29,8 @@ public sealed class UniverseOracleTests
     }
 
     [Theory]
-    [InlineData(new object[] { new[] { "...", "OOO", "..." } })] // Blinker
-    [InlineData(new object[] { new[] { "....", ".OOO", "OOO.", "...." } })] // Toad
+    [InlineData([new[] { "...", "OOO", "..." }])] // Blinker
+    [InlineData([new[] { "....", ".OOO", "OOO.", "...." }])] // Toad
     public void Oscillator_has_period_2(string[] rows)
     {
         var seed = PatternTestHelper.FromAscii(rows);
@@ -161,8 +161,8 @@ public sealed class UniverseOracleTests
     }
 
     [Theory]
-    [InlineData(new object[] { new[] { ".OO", "OO.", ".O." } })] // R-pentomino
-    [InlineData(new object[] { new[] { ".O.....", "...O...", "OO..OOO" } })] // Acorn
+    [InlineData([new[] { ".OO", "OO.", ".O." }])] // R-pentomino
+    [InlineData([new[] { ".O.....", "...O...", "OO..OOO" }])] // Acorn
     public void Methuselahs_eventually_converge_and_do_so_deterministically(string[] rows)
     {
         // These are used as convergence-and-determinism tests, not exact-generation-count tests: the

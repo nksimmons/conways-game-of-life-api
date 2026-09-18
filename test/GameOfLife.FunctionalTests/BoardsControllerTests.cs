@@ -6,13 +6,11 @@ using GameOfLife.Api.Contracts;
 
 namespace GameOfLife.FunctionalTests;
 
-public sealed class BoardsControllerTests : IClassFixture<GameOfLifeApiFactory>
+public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClassFixture<GameOfLifeApiFactory>
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    private readonly HttpClient _client;
-
-    public BoardsControllerTests(GameOfLifeApiFactory factory) => _client = factory.CreateClient();
+    private readonly HttpClient _client = factory.CreateClient();
 
     private static object BlinkerRequestBody() => new
     {
@@ -108,6 +106,35 @@ public sealed class BoardsControllerTests : IClassFixture<GameOfLifeApiFactory>
             document.RootElement.GetProperty("type").GetString());
         Assert.Equal("The request is invalid.", document.RootElement.GetProperty("title").GetString());
         Assert.True(document.RootElement.TryGetProperty("errors", out _));
+    }
+
+    /// <summary>
+    /// The body parameter and <c>Cells</c> are both non-nullable, so MVC rejects these during binding
+    /// and neither the validator nor the controller carries a null case.
+    /// </summary>
+    [Theory]
+    [InlineData("")] // no body at all
+    [InlineData("null")] // a literal JSON null
+    [InlineData("""{"cells":null}""")]
+    [InlineData("{}")] // cells absent
+    public async Task CreateBoard_rejects_a_null_or_absent_body(string json)
+    {
+        using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        var response = await _client.PostAsync("/api/v1/boards", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "https://gameoflife.example/problems/invalid-request",
+            document.RootElement.GetProperty("type").GetString());
+
+        // An empty key is not something a client can act on, so the factory rebinds it to "body".
+        foreach (var error in document.RootElement.GetProperty("errors").EnumerateObject())
+        {
+            Assert.NotEmpty(error.Name);
+        }
     }
 
     [Fact]

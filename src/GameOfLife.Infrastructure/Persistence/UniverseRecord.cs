@@ -17,7 +17,7 @@ internal sealed class UniverseRecord
 
     public string TopologyId { get; set; } = string.Empty;
 
-    public byte[] SeedPacked { get; set; } = Array.Empty<byte>();
+    public byte[] SeedPacked { get; set; } = [];
 
     public DateTimeOffset CreatedAtUtc { get; set; }
 }

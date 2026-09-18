@@ -8,7 +8,7 @@ internal static class PatternTestHelper
     public static Pattern FromAscii(params string[] rows)
     {
         var grid = rows
-            .Select(row => (IReadOnlyList<int>)row.Select(ch => ch == 'O' ? 1 : 0).ToList())
+            .Select(row => (IReadOnlyList<int>)[.. row.Select(ch => ch == 'O' ? 1 : 0)])
             .ToList();
 
         return Pattern.FromRows(grid);
@@ -35,6 +35,6 @@ internal static class PatternTestHelper
             }
         }
 
-        return Pattern.FromRows(grid.Select(row => (IReadOnlyList<int>)row).ToList());
+        return Pattern.FromRows([.. grid.Select(row => (IReadOnlyList<int>)row)]);
     }
 }

@@ -24,7 +24,7 @@ public sealed class PatternTests
     [Fact]
     public void FromRows_rejects_empty_rows()
     {
-        Assert.Throws<ArgumentException>(() => Pattern.FromRows(Array.Empty<IReadOnlyList<int>>()));
+        Assert.Throws<ArgumentException>(() => Pattern.FromRows([]));
     }
 
     [Fact]

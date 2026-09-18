@@ -8,12 +8,8 @@ namespace GameOfLife.Infrastructure.Persistence;
 /// The only code in this repository that knows SQL exists. Translates between the domain
 /// <see cref="Universe"/> and its <see cref="UniverseRecord"/> persistence shape.
 /// </summary>
-public sealed class EfUniverseRepository : IUniverseRepository
+public sealed class EfUniverseRepository(GameOfLifeDbContext dbContext) : IUniverseRepository
 {
-    private readonly GameOfLifeDbContext _dbContext;
-
-    public EfUniverseRepository(GameOfLifeDbContext dbContext) => _dbContext = dbContext;
-
     public async Task<Universe?> FindAsync(UniverseId id, CancellationToken ct)
     {
         using var activity = GameOfLifeDiagnostics.ActivitySource.StartActivity("persistence.find-universe");
@@ -21,7 +17,7 @@ public sealed class EfUniverseRepository : IUniverseRepository
         // AsNoTracking: a universe is never updated after AddAsync (docs/design.md §7.1), so there is
         // nothing for the change tracker to track and no later SaveChanges that could need it. Skipping
         // it avoids the snapshot and identity-map bookkeeping EF would otherwise do for free.
-        var record = await _dbContext.Universes
+        var record = await dbContext.Universes
             .AsNoTracking()
             .FirstOrDefaultAsync(u => u.Id == id.Value, ct)
             .ConfigureAwait(false);
@@ -53,11 +49,11 @@ public sealed class EfUniverseRepository : IUniverseRepository
             Height = universe.Seed.Height,
             RuleId = universe.Rule.Value,
             TopologyId = universe.Topology.Value,
-            SeedPacked = universe.Seed.PackedBytes.ToArray(),
+            SeedPacked = [.. universe.Seed.PackedBytes],
             CreatedAtUtc = universe.CreatedAtUtc,
         };
 
-        _dbContext.Universes.Add(record);
-        await _dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        dbContext.Universes.Add(record);
+        await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
     }
 }

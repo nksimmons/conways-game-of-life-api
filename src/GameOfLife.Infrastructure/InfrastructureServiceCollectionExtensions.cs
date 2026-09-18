@@ -42,7 +42,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IUniverseRepository, EfUniverseRepository>();
 
         services.AddHealthChecks()
-            .AddCheck<DatabaseHealthCheck>("database", tags: new[] { "ready" });
+            .AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
 
         return services;
     }

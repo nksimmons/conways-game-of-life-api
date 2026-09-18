@@ -2,17 +2,9 @@ using GameOfLife.Domain.Domain;
 
 namespace GameOfLife.Application.CreateUniverse;
 
-public sealed class CreateUniverseCommandHandler : ICommandHandler<CreateUniverseCommand>
+public sealed class CreateUniverseCommandHandler(IUniverseRepository repository, TimeProvider timeProvider)
+    : ICommandHandler<CreateUniverseCommand>
 {
-    private readonly IUniverseRepository _repository;
-    private readonly TimeProvider _timeProvider;
-
-    public CreateUniverseCommandHandler(IUniverseRepository repository, TimeProvider timeProvider)
-    {
-        _repository = repository;
-        _timeProvider = timeProvider;
-    }
-
     public async Task HandleAsync(CreateUniverseCommand command, CancellationToken ct)
     {
         // Rule and topology are hardcoded rather than accepted from the request: the API exposes only
@@ -23,8 +15,8 @@ public sealed class CreateUniverseCommandHandler : ICommandHandler<CreateUnivers
             command.Seed,
             RuleId.Standard,
             TopologyId.Bounded,
-            _timeProvider.GetUtcNow());
+            timeProvider.GetUtcNow());
 
-        await _repository.AddAsync(universe, ct).ConfigureAwait(false);
+        await repository.AddAsync(universe, ct).ConfigureAwait(false);
     }
 }

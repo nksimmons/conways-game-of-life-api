@@ -5,15 +5,12 @@ using GameOfLife.Domain.Observability;
 
 namespace GameOfLife.Application.GetGeneration;
 
-public sealed class GetGenerationQueryHandler : IQueryHandler<GetGenerationQuery, PatternView>
+public sealed class GetGenerationQueryHandler(IUniverseRepository repository)
+    : IQueryHandler<GetGenerationQuery, PatternView>
 {
-    private readonly IUniverseRepository _repository;
-
-    public GetGenerationQueryHandler(IUniverseRepository repository) => _repository = repository;
-
     public async Task<Result<PatternView>> HandleAsync(GetGenerationQuery query, CancellationToken ct)
     {
-        var universe = await _repository.FindAsync(query.Id, ct).ConfigureAwait(false);
+        var universe = await repository.FindAsync(query.Id, ct).ConfigureAwait(false);
         if (universe is null)
         {
             return Result<PatternView>.NotFound();
