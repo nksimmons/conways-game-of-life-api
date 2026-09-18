@@ -65,15 +65,18 @@ public sealed class PatternTests
     [Fact]
     public void PackedBytes_round_trips_through_FromPackedBytes()
     {
+        // Non-square, so that confusing width with height inside FromPackedBytes cannot survive:
+        // both orderings pack into the same number of bytes, so only the dimensions expose a swap.
         var original = PatternTestHelper.FromAscii(
             "OO.",
-            ".O.",
-            "O.O");
+            ".O.");
 
         var roundTripped = Pattern.FromPackedBytes(original.Width, original.Height, original.PackedBytes);
 
         Assert.Equal(original, roundTripped);
         Assert.Equal(original.Population, roundTripped.Population);
+        Assert.Equal(3, roundTripped.Width);
+        Assert.Equal(2, roundTripped.Height);
     }
 
     [Fact]

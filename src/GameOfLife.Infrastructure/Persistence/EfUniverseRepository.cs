@@ -23,7 +23,9 @@ public sealed class EfUniverseRepository(GameOfLifeDbContext dbContext) : IUnive
 
         if (record is null) return null;
 
-        var seed = Pattern.FromPackedBytes(record.Width, record.Height, record.SeedPacked);
+        // Named, because width and height are adjacent ints: a swap compiles, packs to the same byte
+        // count, and silently transposes every non-square board read back from storage.
+        var seed = Pattern.FromPackedBytes(width: record.Width, height: record.Height, record.SeedPacked);
         return new Universe(
             new UniverseId(record.Id),
             seed,
