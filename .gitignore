@@ -55,3 +55,12 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# SQLite files created by running the API or the integration suite
+*.db
+*.db-shm
+*.db-wal
+
+# Python bytecode from the bench harness
+__pycache__/
+*.pyc
