@@ -8,17 +8,19 @@ public sealed class PatternTests
     [Fact]
     public void FromRows_reads_cells_in_row_major_order()
     {
+        // Asymmetric under transposition on purpose. A diagonal seed would pass this test even if
+        // rows and columns were swapped throughout, which is exactly what it exists to rule out.
         var pattern = PatternTestHelper.FromAscii(
-            "O.",
-            ".O");
+            "OO",
+            "..");
 
         Assert.Equal(2, pattern.Width);
         Assert.Equal(2, pattern.Height);
         Assert.Equal(2, pattern.Population);
         Assert.True(pattern.IsAlive(0, 0));
-        Assert.False(pattern.IsAlive(0, 1));
+        Assert.True(pattern.IsAlive(0, 1));
         Assert.False(pattern.IsAlive(1, 0));
-        Assert.True(pattern.IsAlive(1, 1));
+        Assert.False(pattern.IsAlive(1, 1));
     }
 
     [Fact]

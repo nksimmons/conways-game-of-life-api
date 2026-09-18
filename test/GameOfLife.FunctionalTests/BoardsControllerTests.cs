@@ -163,7 +163,11 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
         var body = await response.Content.ReadFromJsonAsync<BoardResponse>(JsonOptions);
         Assert.NotNull(body);
         Assert.Equal(created.BoardId, body!.BoardId);
-        Assert.Equal(3, body.Cells.Length);
+
+        // Compare the cells, not just the row count. The blinker is asymmetric under transposition,
+        // so this also pins the orientation end to end: a row/column swap anywhere between parsing
+        // and rendering would return the vertical blinker instead.
+        Assert.Equal(new[] { new[] { 0, 0, 0 }, new[] { 1, 1, 1 }, new[] { 0, 0, 0 } }, body.Cells);
     }
 
     [Fact]
