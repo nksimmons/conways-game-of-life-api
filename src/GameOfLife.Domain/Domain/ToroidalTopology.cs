@@ -17,22 +17,11 @@ public sealed class ToroidalTopology : ITopology
         ArgumentNullException.ThrowIfNull(pattern);
 
         var count = 0;
-        for (var deltaRow = -1; deltaRow <= 1; deltaRow++)
+        foreach (var (deltaRow, deltaCol) in Topologies.NeighborOffsets)
         {
-            for (var deltaCol = -1; deltaCol <= 1; deltaCol++)
-            {
-                if (deltaRow == 0 && deltaCol == 0)
-                {
-                    continue;
-                }
-
-                var neighborRow = Wrap(row + deltaRow, pattern.Height);
-                var neighborCol = Wrap(col + deltaCol, pattern.Width);
-                if (pattern.IsAlive(neighborRow, neighborCol))
-                {
-                    count++;
-                }
-            }
+            var neighborRow = Wrap(row + deltaRow, pattern.Height);
+            var neighborCol = Wrap(col + deltaCol, pattern.Width);
+            if (pattern.IsAlive(neighborRow, neighborCol)) count++;
         }
 
         return count;
@@ -43,6 +32,6 @@ public sealed class ToroidalTopology : ITopology
         // C#'s % can return a negative result for a negative dividend (e.g. -1 % 32 == -1, not 31),
         // so a single mod is not enough to wrap row/col - 1 at index 0. The extra +modulus, %modulus
         // shifts the result back into [0, modulus) regardless of the sign of the input.
-        return ((value % modulus) + modulus) % modulus;
+        return (value % modulus + modulus) % modulus;
     }
 }

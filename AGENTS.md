@@ -84,7 +84,7 @@ Domain objects validate their own invariants in constructors via guard clauses. 
 - **Spaceship, glider, still life, and oscillator are observations, not fields.** They classify behaviour discovered by generating. Never add an `IsSpaceship` or `PatternKind` property to the model. They belong in tests and in response metadata derived from `Fate`, nowhere else.
 - The **universe is an immutable seed.** Generations are computed, never stored. Do not add a "current generation" field or an `Advance()` method that mutates state. This single property underpins the caching, concurrency, and durability design, and breaking it invalidates all three.
 - Generation *N* must be a **pure function** of the seed, rule, topology, and *N*. No clock, no randomness, no ambient state.
-- Cell storage is **bit-packed** behind `Pattern`. Callers use `pattern.IsAlive(row, col)`. Never expose the backing array or make callers compute offsets.
+- Cell storage is **bit-packed** behind `Pattern`. Callers use `pattern.IsAlive(row, col)`. Never expose the backing array or make callers compute offsets. Projecting a pattern into a row-major 2D integer grid for transport JSON belongs in Api mapping via the `pattern.ToRows()` extension method, querying `IsAlive` to preserve encapsulation.
 - The evolution rule (`ILifeRule`) and topology (`ITopology`) are strategies. Do not hard-code B3/S23 or dead-edge logic into the aggregate.
 - **Update generations simultaneously.** Every cell must read its neighbours' *previous* state. Updating in reading order produces "NaiveLife", a subtly different automaton and the most common bug in this problem. The Blinker and Glider tests exist to catch it; keep them passing.
 - **There is no generation checkpointing, and `GET` handlers write nothing.** Checkpointing was designed and then cut, because bounding the input caps bounded worst-case cost directly ([docs/design.md §12](docs/design.md)). Do not reintroduce a snapshot table, a cache port, or a best-effort write on a read path.
@@ -102,7 +102,7 @@ Domain objects validate their own invariants in constructors via guard clauses. 
 - Do not queue per-request work onto the thread pool. Never `Task.Run` in a request path.
 - Thread `CancellationToken` through **every** async call and every long-running loop. In endpoints it originates from `HttpContext.RequestAborted`. A cancelled request must stop consuming CPU promptly.
 - Never call `.Result`, `.Wait()`, or `.GetAwaiter().GetResult()`.
-- Use `ConfigureAwait(false)` in `Domain`, `Application`, and `Infrastructure`. It is unnecessary in `Api`.
+- Do not use `ConfigureAwait(false)`. It does not do anything as of .NET Core because ASP.NET Core has no `SynchronizationContext`.
 - Prefer `ValueTask` only where a hot path demonstrably allocates; default to `Task`.
 
 ### 3.2 Concurrency
@@ -136,9 +136,9 @@ Bound concurrency explicitly, since unbounded parallelism is a defect. Admission
 
 ### 3.5 Validation and input safety
 
-Validate at the **system boundary** (Api), using the FluentValidation validator in `Api/Validation`, invoked explicitly by the controller. Do not reintroduce auto-validation via a filter or the deprecated `FluentValidation.AspNetCore` pipeline; [docs/design.md §10.5](docs/design.md) records why. Do not add defensive validation to internal methods for conditions that cannot occur.
+Validate at the **system boundary** (Api), using the FluentValidation validator in `Api/Validation`, invoked explicitly by the controller. Do not reintroduce auto-validation via a filter or the deprecated `FluentValidation.AspNetCore` pipeline; [docs/design.md §10.5](docs/design.md) records why. Do not add defensive validation to internal methods for conditions that cannot occur. When invoking a validator, name the resulting `ValidationResult` variable `validationResult`, not `validation`.
 
-Every `400`, whether it originates in model binding or in a validation rule, must be built by `ValidationProblems` so there is exactly one problem shape. Never echo a model-binder or serializer message into a response body: those name CLR types and byte offsets.
+Every `400`, whether it originates in model binding or in a validation rule, must be built by `Errors` so there is exactly one problem shape. Never echo a model-binder or serializer message into a response body: those name CLR types and byte offsets.
 
 Every one of these must be enforced and tested:
 
@@ -159,6 +159,11 @@ Raising any of them is a design change, not a configuration tweak: it invalidate
 - Treat warnings as errors. Do not add `#pragma warning disable` to get past a build.
 - Prefer `readonly record struct` / `record` for value objects.
 - Prefer `sealed` classes by default.
+- Prefer expression-bodied members when possible.
+- Prefer extension methods when an operation naturally acts on an existing value, such as `rule.Resolve()` or `errors.ToProblemDetails()`. Keep constructors, named factories, and genuinely receiver-free operations static; do not invent a receiver just to hide a static call.
+- Prefer `foreach` over raw `for` loops. When both a value and its position are needed, use `source.WithIndex()` from `GameOfLife.Domain.Common` and tuple deconstruction, or an indexed `Select`. Use LINQ projections to construct collections and `Enumerable.Range` for bounded counter-only iteration.
+- Keep hot-loop iteration allocation-conscious: reuse neighbour offsets and column indices rather than building a LINQ pipeline per cell. Measure evolution throughput and allocations when changing these loops; document any necessary exception to the iteration preference.
+- Express small domain rule tables with pattern-matching switches. Introduce an enum when it names genuinely distinct domain states, not just to rename a Boolean; use a fluent rule builder only if a concrete requirement needs rule composition.
 - No `#region`. No commented-out code.
 - Use `TimeProvider` rather than `DateTime.Now` / `DateTimeOffset.UtcNow` so time is testable. Prefer UTC everywhere.
 

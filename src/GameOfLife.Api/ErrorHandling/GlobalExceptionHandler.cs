@@ -8,24 +8,22 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
 {
     public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken ct)
     {
-        if (exception is OperationCanceledException)
+        switch (exception)
         {
-            return true;
-        }
-
-        // Kestrel raises this for protocol-level rejections, most relevantly an oversized body (413).
-        // It is an anticipated client error, so it keeps its own status code rather than becoming a 500.
-        if (exception is BadHttpRequestException badRequest)
-        {
-            await WriteProblemAsync(
-                httpContext,
-                badRequest.StatusCode,
-                "https://gameoflife.example/problems/bad-request",
-                badRequest.StatusCode == StatusCodes.Status413PayloadTooLarge
-                    ? "The request body is too large."
-                    : "The request could not be processed.",
-                ct);
-            return true;
+            case OperationCanceledException:
+                return true;
+            // Kestrel raises this for protocol-level rejections, most relevantly an oversized body (413).
+            // It is an anticipated client error, so it keeps its own status code rather than becoming a 500.
+            case BadHttpRequestException badRequest:
+                await WriteErrorAsync(
+                    httpContext,
+                    badRequest.StatusCode,
+                    "https://gameoflife.example/problems/bad-request",
+                    badRequest.StatusCode == StatusCodes.Status413PayloadTooLarge
+                        ? "The request body is too large."
+                        : "The request could not be processed.",
+                    ct);
+                return true;
         }
 
         logger.LogError(
@@ -34,7 +32,7 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
             httpContext.Request.Method,
             httpContext.Request.Path);
 
-        await WriteProblemAsync(
+        await WriteErrorAsync(
             httpContext,
             StatusCodes.Status500InternalServerError,
             "https://gameoflife.example/problems/internal-error",
@@ -44,7 +42,8 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         return true;
     }
 
-    private static Task WriteProblemAsync(HttpContext httpContext, int statusCode, string type, string title, CancellationToken ct)
+    private static Task WriteErrorAsync(HttpContext httpContext, int statusCode, string type, string title,
+        CancellationToken ct)
     {
         httpContext.Response.StatusCode = statusCode;
         return httpContext.Response.WriteAsJsonAsync(

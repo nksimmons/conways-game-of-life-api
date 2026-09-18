@@ -6,9 +6,9 @@ using Microsoft.Extensions.Options;
 namespace GameOfLife.Api.Validation;
 
 /// <summary>
-/// Boundary validation for the board upload. Domain guard clauses in <c>Pattern.FromRows</c> enforce
-/// the same invariants independently; these exist to turn a bad request into a 400 rather than an
-/// exception, and the caps among them are denial-of-service controls (docs/design.md §10.1).
+///     Boundary validation for the board upload. Domain guard clauses in <c>Pattern.FromRows</c> enforce
+///     the same invariants independently; these exist to turn a bad request into a 400 rather than an
+///     exception, and the caps among them are denial-of-service controls (docs/design.md §10.1).
 /// </summary>
 public sealed class UploadBoardRequestValidator : AbstractValidator<UploadBoardRequest>
 {
@@ -30,6 +30,8 @@ public sealed class UploadBoardRequestValidator : AbstractValidator<UploadBoardR
             .WithMessage("cells must be a non-empty 2D array.")
             .Must(cells => cells.Length > 0)
             .WithMessage("cells must be a non-empty 2D array.")
+            .Must(cells => cells.All(row => row is not null))
+            .WithMessage("cells rows must not be null.")
             .Must(cells => (cells[0]?.Length ?? 0) > 0)
             .WithMessage("cells rows must be non-empty.")
             .DependentRules(() =>
@@ -52,12 +54,9 @@ public sealed class UploadBoardRequestValidator : AbstractValidator<UploadBoardR
             });
     }
 
-    private static bool BeRectangular(int[][] cells)
-    {
-        var width = cells[0].Length;
-        return Array.TrueForAll(cells, row => row is not null && row.Length == width);
-    }
+    private static bool BeRectangular(int[][] cells) =>
+        cells.All(row => row.Length == cells[0].Length);
 
     private static bool HoldOnlyBinaryValues(int[][] cells) =>
-        Array.TrueForAll(cells, row => row is null || Array.TrueForAll(row, value => value is 0 or 1));
+        cells.All(row => row.All(value => value is 0 or 1));
 }

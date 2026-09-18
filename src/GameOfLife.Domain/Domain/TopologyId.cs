@@ -1,6 +1,6 @@
 namespace GameOfLife.Domain.Domain;
 
-/// <summary>Identifies which <see cref="ITopology"/> a universe's edge behaviour follows.</summary>
+/// <summary>Identifies which <see cref="ITopology" /> a universe's edge behaviour follows.</summary>
 public readonly record struct TopologyId(string Value)
 {
     public static readonly TopologyId Bounded = new("bounded");

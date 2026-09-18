@@ -6,15 +6,25 @@ using Microsoft.EntityFrameworkCore;
 namespace GameOfLife.IntegrationTests;
 
 /// <summary>
-/// The same repository contract as <see cref="SqliteUniverseRepositoryTests"/>, run against Postgres.
-/// Running the identical suite against a second engine demonstrates that the <c>IUniverseRepository</c>
-/// port actually holds, rather than merely asserting that it would. Requires the docker-compose
-/// "postgres" profile; see <see cref="PostgresFactAttribute"/>.
+///     The same repository contract as <see cref="SqliteUniverseRepositoryTests" />, run against Postgres.
+///     Running the identical suite against a second engine demonstrates that the <c>IUniverseRepository</c>
+///     port actually holds, rather than merely asserting that it would. Requires the docker-compose
+///     "postgres" profile; see <see cref="PostgresFactAttribute" />.
 /// </summary>
 public sealed class PostgresUniverseRepositoryTests : IAsyncLifetime
 {
     private readonly string _connectionString =
         Environment.GetEnvironmentVariable(PostgresFactAttribute.ConnectionStringEnvironmentVariable) ?? string.Empty;
+
+    public async Task InitializeAsync()
+    {
+        if (string.IsNullOrEmpty(_connectionString)) return;
+
+        await using var context = CreateContext();
+        await context.Database.EnsureCreatedAsync();
+    }
+
+    public Task DisposeAsync() => Task.CompletedTask;
 
     private GameOfLifeDbContext CreateContext()
     {
@@ -23,19 +33,6 @@ public sealed class PostgresUniverseRepositoryTests : IAsyncLifetime
             .Options;
         return new GameOfLifeDbContext(options);
     }
-
-    public async Task InitializeAsync()
-    {
-        if (string.IsNullOrEmpty(_connectionString))
-        {
-            return;
-        }
-
-        await using var context = CreateContext();
-        await context.Database.EnsureCreatedAsync();
-    }
-
-    public Task DisposeAsync() => Task.CompletedTask;
 
     [PostgresFact]
     public async Task AddAsync_then_FindAsync_round_trips_the_universe()

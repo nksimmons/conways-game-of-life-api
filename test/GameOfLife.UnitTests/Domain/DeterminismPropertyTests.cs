@@ -13,26 +13,20 @@ public sealed class DeterminismPropertyTests
         var height = Math.Abs(rawHeight) % 12 + 1;
         var random = new Random(seed);
 
-        var rows = new List<IReadOnlyList<int>>(height);
-        for (var r = 0; r < height; r++)
-        {
-            var row = new List<int>(width);
-            for (var c = 0; c < width; c++)
-            {
-                row.Add(random.Next(2));
-            }
-
-            rows.Add(row);
-        }
+        var rows = Enumerable.Range(0, height)
+            .Select(_ => (IReadOnlyList<int>)Enumerable.Range(0, width).Select(_ => random.Next(2)).ToArray())
+            .ToArray();
 
         return Pattern.FromRows(rows);
     }
 
     [Property]
-    public bool GenerationAt_is_deterministic_for_the_same_seed_rule_and_topology(int seed, int rawWidth, int rawHeight, PositiveInt rawGeneration)
+    public bool GenerationAt_is_deterministic_for_the_same_seed_rule_and_topology(int seed, int rawWidth, int rawHeight,
+        PositiveInt rawGeneration)
     {
         var pattern = RandomPattern(seed, rawWidth, rawHeight);
-        var universe = new Universe(UniverseId.NewId(), pattern, RuleId.Standard, TopologyId.Bounded, DateTimeOffset.UnixEpoch);
+        var universe = new Universe(UniverseId.NewId(), pattern, RuleId.Standard, TopologyId.Bounded,
+            DateTimeOffset.UnixEpoch);
         var generation = rawGeneration.Get % 20;
 
         var first = universe.GenerationAt(generation, CancellationToken.None);
@@ -45,7 +39,8 @@ public sealed class DeterminismPropertyTests
     public bool GenerationAt_zero_is_always_the_seed(int seed, int rawWidth, int rawHeight)
     {
         var pattern = RandomPattern(seed, rawWidth, rawHeight);
-        var universe = new Universe(UniverseId.NewId(), pattern, RuleId.Standard, TopologyId.Bounded, DateTimeOffset.UnixEpoch);
+        var universe = new Universe(UniverseId.NewId(), pattern, RuleId.Standard, TopologyId.Bounded,
+            DateTimeOffset.UnixEpoch);
 
         var generationZero = universe.GenerationAt(0, CancellationToken.None);
 
@@ -53,7 +48,8 @@ public sealed class DeterminismPropertyTests
     }
 
     [Property]
-    public bool NextGeneration_never_produces_more_population_than_cells_in_the_grid(int seed, int rawWidth, int rawHeight)
+    public bool NextGeneration_never_produces_more_population_than_cells_in_the_grid(int seed, int rawWidth,
+        int rawHeight)
     {
         var pattern = RandomPattern(seed, rawWidth, rawHeight);
         var next = pattern.NextGeneration(StandardLifeRule.Instance, BoundedTopology.Instance, CancellationToken.None);
@@ -65,7 +61,8 @@ public sealed class DeterminismPropertyTests
     public bool DetermineFate_is_deterministic(int seed, int rawWidth, int rawHeight)
     {
         var pattern = RandomPattern(seed, rawWidth, rawHeight);
-        var universe = new Universe(UniverseId.NewId(), pattern, RuleId.Standard, TopologyId.Bounded, DateTimeOffset.UnixEpoch);
+        var universe = new Universe(UniverseId.NewId(), pattern, RuleId.Standard, TopologyId.Bounded,
+            DateTimeOffset.UnixEpoch);
 
         var first = universe.DetermineFate(200, CancellationToken.None);
         var second = universe.DetermineFate(200, CancellationToken.None);

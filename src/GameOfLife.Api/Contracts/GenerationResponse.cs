@@ -2,6 +2,10 @@ using System.Text.Json.Serialization;
 
 namespace GameOfLife.Api.Contracts;
 
+/// <summary>
+///     The state of a board at generation <see cref="Generation" />, including dimensions, population count,
+///     and cell grid.
+/// </summary>
 public sealed record GenerationResponse(
     string BoardId,
     int Generation,

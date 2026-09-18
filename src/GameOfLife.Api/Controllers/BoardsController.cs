@@ -1,15 +1,16 @@
-using GameOfLife.Domain.Common;
-using GameOfLife.Domain.Domain;
+using FluentValidation;
+using GameOfLife.Api.Contracts;
+using GameOfLife.Api.Filters;
+using GameOfLife.Api.Mapping;
+using GameOfLife.Api.Options;
+using GameOfLife.Api.Validation;
 using GameOfLife.Application;
 using GameOfLife.Application.CreateUniverse;
 using GameOfLife.Application.GetFinalState;
 using GameOfLife.Application.GetGeneration;
 using GameOfLife.Application.GetUniverse;
-using GameOfLife.Api.Contracts;
-using GameOfLife.Api.Mapping;
-using GameOfLife.Api.Options;
-using GameOfLife.Api.Validation;
-using FluentValidation;
+using GameOfLife.Domain.Common;
+using GameOfLife.Domain.Domain;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
@@ -17,8 +18,8 @@ using Microsoft.Extensions.Options;
 namespace GameOfLife.Api.Controllers;
 
 /// <summary>
-/// Translates HTTP onto the four use cases. Contains no business logic: it binds, validates the
-/// boundary caps, calls a handler, and maps the Result onto a status code.
+///     Translates HTTP onto the four use cases. Contains no business logic: it binds, validates the
+///     boundary caps, calls a handler, and maps the Result onto a status code.
 /// </summary>
 [ApiController]
 [Route("api/v1/boards")]
@@ -48,18 +49,16 @@ public sealed class BoardsController(
         // validating in the controller anyway, so the explicit call is both supported and expected.
         // A null or absent body never reaches this point: the parameter is non-nullable, so MVC
         // rejects one during binding and the same factory shapes that response.
-        var validation = await uploadValidator.ValidateAsync(board, ct);
-        if (!validation.IsValid)
-        {
-            return BadRequest(ValidationProblems.Create(validation.ToDictionary()));
-        }
+        var validationResult = await uploadValidator.ValidateAsync(board, ct);
+        if (!validationResult.IsValid) return BadRequest(validationResult.ToDictionary().ToProblemDetails());
 
         var seed = Pattern.FromRows(board.Cells);
         var id = UniverseId.NewId();
 
         await createHandler.HandleAsync(new CreateUniverseCommand(id, seed), ct);
 
-        var response = new BoardCreatedResponse(id.ToString(), seed.Width, seed.Height, seed.Population, BuildBoardLinks(id.Value));
+        var response = new BoardCreatedResponse(id.ToString(), seed.Width, seed.Height, seed.Population,
+            BuildBoardLinks(id.Value));
         return CreatedAtRoute("GetBoard", new { id = id.Value }, response);
     }
 
@@ -67,10 +66,7 @@ public sealed class BoardsController(
     public async Task<IActionResult> GetBoard(Guid id, CancellationToken ct)
     {
         var result = await getUniverseHandler.HandleAsync(new GetUniverseQuery(new UniverseId(id)), ct);
-        if (result.Status == ResultStatus.NotFound)
-        {
-            return BoardNotFoundProblem(id);
-        }
+        if (result.Status == ResultStatus.NotFound) return BoardNotFoundError(id);
 
         var view = result.Value;
         var response = new BoardResponse(
@@ -80,7 +76,7 @@ public sealed class BoardsController(
             view.Rule.Value,
             view.Topology.Value,
             view.CreatedAtUtc,
-            PatternMapper.ToRows(view.Seed),
+            view.Seed.ToRows(),
             BuildBoardLinks(id));
 
         return Ok(response);
@@ -88,44 +84,41 @@ public sealed class BoardsController(
 
     [HttpGet("{id:guid}/generations/{n:int}", Name = "GetGeneration")]
     [EnableRateLimiting(EvaluationPolicy)]
+    [GenerationETag]
     public async Task<IActionResult> GetGeneration(Guid id, int n, CancellationToken ct)
     {
         // A single scalar bound from the route, so a validator class would be more ceremony than rule.
-        if (n < 0 || n > _options.MaxGenerationsAhead)
-        {
-            return BadRequest(ValidationProblems.Create(new Dictionary<string, string[]>
+        return n < 0 || n > _options.MaxGenerationsAhead
+            ? BadRequest(new Dictionary<string, string[]>
             {
-                ["n"] = [$"n must be between 0 and {_options.MaxGenerationsAhead}."],
-            }));
-        }
-
-        return await GenerationAsync(id, n, ct);
+                ["n"] = [$"n must be between 0 and {_options.MaxGenerationsAhead}."]
+            }.ToProblemDetails())
+            : await GenerationAsync(id, n, ct);
     }
 
     [HttpGet("{id:guid}/next", Name = "GetNextGeneration")]
     [EnableRateLimiting(EvaluationPolicy)]
+    [GenerationETag(1)]
     public Task<IActionResult> GetNextGeneration(Guid id, CancellationToken ct) => GenerationAsync(id, 1, ct);
 
     [HttpGet("{id:guid}/final", Name = "GetFinalState")]
     [EnableRateLimiting(EvaluationPolicy)]
     public async Task<IActionResult> GetFinalState(Guid id, CancellationToken ct)
     {
-        var query = new GetFinalStateQuery(new UniverseId(id), _options.FinalStateIterationBudget);
-        var result = await getFinalStateHandler.HandleAsync(query, ct);
-        if (result.Status == ResultStatus.NotFound)
-        {
-            return BoardNotFoundProblem(id);
-        }
+        var result = await getFinalStateHandler.HandleAsync(
+            new GetFinalStateQuery(
+                new UniverseId(id),
+                _options.FinalStateIterationBudget),
+            ct);
+        if (result.Status == ResultStatus.NotFound) return BoardNotFoundError(id);
 
         var view = result.Value;
         if (view.Stabilized is not { } cycle)
-        {
             return Problem(
                 type: "https://gameoflife.example/problems/final-state-not-converged",
                 title: "The board did not reach a final state within the iteration budget.",
                 statusCode: StatusCodes.Status422UnprocessableEntity,
                 detail: $"Examined {view.IterationsExamined} generations without finding a cycle.");
-        }
 
         var response = new FinalStateResponse(
             id.ToString(),
@@ -134,7 +127,7 @@ public sealed class BoardsController(
             cycle.Pattern.Width,
             cycle.Pattern.Height,
             cycle.Pattern.Population,
-            PatternMapper.ToRows(cycle.Pattern),
+            cycle.Pattern.ToRows(),
             view.IterationsExamined,
             BuildFinalStateLinks(id));
 
@@ -143,87 +136,57 @@ public sealed class BoardsController(
 
     private async Task<IActionResult> GenerationAsync(Guid id, int generation, CancellationToken ct)
     {
-        // Derived from identity, not from content. The representation is a pure function of the board
-        // id and the generation index, both immutable, so the validator can be computed without
-        // evolving anything, which is what lets a conditional request skip the loop entirely. A
-        // content hash cannot do that, and it also collides: a blinker at generations 0 and 2 has the
-        // same cells but is a different representation, with a different `generation` and `_links`.
-        // The `v1` prefix is the representation version, so a change to the response shape invalidates
-        // previously issued validators.
-        var etag = $"\"v1-{id}-{generation}\"";
-
-        if (Request.Headers.IfNoneMatch.Any(value => value == etag))
-        {
-            // Still confirm the board exists, so a fabricated validator gets a 404 rather than a
-            // spurious 304. This is a point lookup, not an evolution.
-            var known = await getUniverseHandler.HandleAsync(new GetUniverseQuery(new UniverseId(id)), ct);
-            if (known.Status == ResultStatus.NotFound)
-            {
-                return BoardNotFoundProblem(id);
-            }
-
-            SetGenerationCacheHeaders(etag);
-            return StatusCode(StatusCodes.Status304NotModified);
-        }
-
         var result = await getGenerationHandler.HandleAsync(new GetGenerationQuery(new UniverseId(id), generation), ct);
-        if (result.Status == ResultStatus.NotFound)
-        {
-            return BoardNotFoundProblem(id);
-        }
+        if (result.Status == ResultStatus.NotFound) return BoardNotFoundError(id);
 
         var view = result.Value;
-        SetGenerationCacheHeaders(etag);
-
         var response = new GenerationResponse(
             id.ToString(),
             view.Generation,
             view.Pattern.Width,
             view.Pattern.Height,
             view.Pattern.Population,
-            PatternMapper.ToRows(view.Pattern),
+            view.Pattern.ToRows(),
             BuildGenerationLinks(id, view.Generation));
 
         return Ok(response);
     }
 
-    private void SetGenerationCacheHeaders(string etag)
-    {
-        Response.Headers.ETag = etag;
-        Response.Headers.CacheControl = "public, max-age=31536000, immutable";
-    }
+    private Dictionary<string, string> BuildBoardLinks(Guid id) =>
+        new()
+        {
+            ["self"] = Link("GetBoard", new { id }),
+            ["next"] = Link("GetNextGeneration", new { id }),
+            ["final"] = Link("GetFinalState", new { id })
+        };
 
-    private Dictionary<string, string> BuildBoardLinks(Guid id) => new()
-    {
-        ["self"] = Link("GetBoard", new { id }),
-        ["next"] = Link("GetNextGeneration", new { id }),
-        ["final"] = Link("GetFinalState", new { id }),
-    };
+    private Dictionary<string, string> BuildGenerationLinks(Guid id, int generation) =>
+        new()
+        {
+            ["self"] = Link("GetGeneration", new { id, n = generation }),
+            ["next"] = Link("GetGeneration", new { id, n = generation + 1 }),
+            ["final"] = Link("GetFinalState", new { id }),
+            ["board"] = Link("GetBoard", new { id })
+        };
 
-    private Dictionary<string, string> BuildGenerationLinks(Guid id, int generation) => new()
-    {
-        ["self"] = Link("GetGeneration", new { id, n = generation }),
-        ["next"] = Link("GetGeneration", new { id, n = generation + 1 }),
-        ["final"] = Link("GetFinalState", new { id }),
-        ["board"] = Link("GetBoard", new { id }),
-    };
-
-    private Dictionary<string, string> BuildFinalStateLinks(Guid id) => new()
-    {
-        ["self"] = Link("GetFinalState", new { id }),
-        ["board"] = Link("GetBoard", new { id }),
-    };
+    private Dictionary<string, string> BuildFinalStateLinks(Guid id) =>
+        new()
+        {
+            ["self"] = Link("GetFinalState", new { id }),
+            ["board"] = Link("GetBoard", new { id })
+        };
 
     // Links come from route templates only; a null here means a route name is wrong, which is a bug to surface, not a link to omit.
     private string Link(string routeName, object values) =>
         linkGenerator.GetPathByName(HttpContext, routeName, values)
         ?? throw new InvalidOperationException($"Route '{routeName}' is not registered.");
 
-    private static IActionResult BoardNotFoundProblem(Guid id) => new NotFoundObjectResult(new ProblemDetails
-    {
-        Type = "https://gameoflife.example/problems/board-not-found",
-        Title = "Board not found.",
-        Status = StatusCodes.Status404NotFound,
-        Detail = $"No board exists with id '{id}'.",
-    });
+    private static IActionResult BoardNotFoundError(Guid id) =>
+        new NotFoundObjectResult(new ProblemDetails
+        {
+            Type = "https://gameoflife.example/problems/board-not-found",
+            Title = "Board not found.",
+            Status = StatusCodes.Status404NotFound,
+            Detail = $"No board exists with id '{id}'."
+        });
 }

@@ -4,14 +4,15 @@ using GameOfLife.UnitTests.TestSupport;
 namespace GameOfLife.UnitTests.Domain;
 
 /// <summary>
-/// Tests built from the published pattern oracles (docs/design.md §6.4). Blinker and Glider in
-/// particular catch "NaiveLife" (updating cells in reading order instead of simultaneously), the
-/// most common implementation bug in this problem.
+///     Tests built from the published pattern oracles (docs/design.md §6.4). Blinker and Glider in
+///     particular catch "NaiveLife" (updating cells in reading order instead of simultaneously), the
+///     most common implementation bug in this problem.
 /// </summary>
 public sealed class UniverseOracleTests
 {
     private static Universe CreateUniverse(Pattern seed, TopologyId? topology = null) =>
-        new(UniverseId.NewId(), seed, RuleId.Standard, topology ?? TopologyId.Bounded, DateTimeOffset.UnixEpoch);
+        new(UniverseId.NewId(), seed, RuleId.Standard, topology ?? TopologyId.Bounded,
+            DateTimeOffset.UnixEpoch);
 
     [Fact]
     public void Block_is_a_still_life()
@@ -21,11 +22,41 @@ public sealed class UniverseOracleTests
             "OO");
 
         var universe = CreateUniverse(seed);
-        var fate = universe.DetermineFate(iterationBudget: 10, CancellationToken.None);
+        var fate = universe.DetermineFate(10, CancellationToken.None);
 
         var stabilized = Assert.IsType<Fate.Stabilized>(fate);
         Assert.Equal(0, stabilized.AtGeneration);
         Assert.Equal(1, stabilized.Period);
+        Assert.Same(seed, stabilized.Pattern);
+        Assert.Equal(1, stabilized.GenerationsComputed);
+    }
+
+    [Fact]
+    public void A_dying_cell_returns_the_verified_empty_pattern_and_counts_the_replay()
+    {
+        var universe = CreateUniverse(PatternTestHelper.FromAscii("O"));
+
+        var fate = Assert.IsType<Fate.Stabilized>(universe.DetermineFate(3, CancellationToken.None));
+
+        Assert.Equal(1, fate.AtGeneration);
+        Assert.Equal(1, fate.Period);
+        Assert.Equal(universe.GenerationAt(1, CancellationToken.None), fate.Pattern);
+        Assert.Equal(0, fate.Pattern.Population);
+        Assert.Equal(3, fate.GenerationsComputed);
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(1, 0)]
+    [InlineData(2, 1)]
+    public void Exhausted_budget_counts_evolution_steps_separately_from_examined_states(int budget, long steps)
+    {
+        var universe = CreateUniverse(PatternTestHelper.FromAscii("O"));
+
+        var fate = Assert.IsType<Fate.Undetermined>(universe.DetermineFate(budget, CancellationToken.None));
+
+        Assert.Equal(budget, fate.GenerationsExamined);
+        Assert.Equal(steps, fate.GenerationsComputed);
     }
 
     [Theory]
@@ -36,7 +67,7 @@ public sealed class UniverseOracleTests
         var seed = PatternTestHelper.FromAscii(rows);
         var universe = CreateUniverse(seed);
 
-        var fate = universe.DetermineFate(iterationBudget: 10, CancellationToken.None);
+        var fate = universe.DetermineFate(10, CancellationToken.None);
 
         var stabilized = Assert.IsType<Fate.Stabilized>(fate);
         Assert.Equal(0, stabilized.AtGeneration);
@@ -53,7 +84,7 @@ public sealed class UniverseOracleTests
             "..OO");
 
         var universe = CreateUniverse(seed);
-        var fate = universe.DetermineFate(iterationBudget: 10, CancellationToken.None);
+        var fate = universe.DetermineFate(10, CancellationToken.None);
 
         var stabilized = Assert.IsType<Fate.Stabilized>(fate);
         Assert.Equal(0, stabilized.AtGeneration);
@@ -80,12 +111,12 @@ public sealed class UniverseOracleTests
             "O....O.O....O",
             "O....O.O....O",
             ".............",
-            "..OOO...OOO..",
+            "..OOO...OOO.."
         };
 
-        var seed = PatternTestHelper.EmbedInGrid(pulsar, gridWidth: 33, gridHeight: 33, rowOffset: 10, colOffset: 10);
+        var seed = PatternTestHelper.EmbedInGrid(pulsar, 33, 33, 10, 10);
         var universe = CreateUniverse(seed);
-        var fate = universe.DetermineFate(iterationBudget: 10, CancellationToken.None);
+        var fate = universe.DetermineFate(10, CancellationToken.None);
 
         var stabilized = Assert.IsType<Fate.Stabilized>(fate);
         Assert.Equal(0, stabilized.AtGeneration);
@@ -101,12 +132,12 @@ public sealed class UniverseOracleTests
         {
             "..O....O..",
             "OO.OOOO.OO",
-            "..O....O..",
+            "..O....O.."
         };
 
-        var seed = PatternTestHelper.EmbedInGrid(pentadecathlon, gridWidth: 30, gridHeight: 23, rowOffset: 10, colOffset: 10);
+        var seed = PatternTestHelper.EmbedInGrid(pentadecathlon, 30, 23, 10, 10);
         var universe = CreateUniverse(seed);
-        var fate = universe.DetermineFate(iterationBudget: 20, CancellationToken.None);
+        var fate = universe.DetermineFate(20, CancellationToken.None);
 
         var stabilized = Assert.IsType<Fate.Stabilized>(fate);
         Assert.Equal(0, stabilized.AtGeneration);
@@ -120,18 +151,18 @@ public sealed class UniverseOracleTests
         {
             ".O.",
             "..O",
-            "OOO",
+            "OOO"
         };
 
         // Generously padded so the glider never approaches the bounded edge across 8 generations.
-        var seed = PatternTestHelper.EmbedInGrid(glider, gridWidth: 20, gridHeight: 20, rowOffset: 2, colOffset: 2);
+        var seed = PatternTestHelper.EmbedInGrid(glider, 20, 20, 2, 2);
         var universe = CreateUniverse(seed);
 
         var generationFour = universe.GenerationAt(4, CancellationToken.None);
         var generationEight = universe.GenerationAt(8, CancellationToken.None);
 
-        var expectedAtFour = PatternTestHelper.EmbedInGrid(glider, 20, 20, rowOffset: 3, colOffset: 3);
-        var expectedAtEight = PatternTestHelper.EmbedInGrid(glider, 20, 20, rowOffset: 4, colOffset: 4);
+        var expectedAtFour = PatternTestHelper.EmbedInGrid(glider, 20, 20, 3, 3);
+        var expectedAtEight = PatternTestHelper.EmbedInGrid(glider, 20, 20, 4, 4);
 
         Assert.Equal(expectedAtFour, generationFour);
         Assert.Equal(expectedAtEight, generationEight);
@@ -145,12 +176,12 @@ public sealed class UniverseOracleTests
         {
             "......O.",
             "OO......",
-            ".O...OOO",
+            ".O...OOO"
         };
 
         // Diehard's flight excursion reaches roughly 20 cells away from the seed before it dies;
         // this margin keeps it clear of the bounded edge for all 130 generations.
-        var seed = PatternTestHelper.EmbedInGrid(diehard, gridWidth: 50, gridHeight: 50, rowOffset: 15, colOffset: 15);
+        var seed = PatternTestHelper.EmbedInGrid(diehard, 50, 50, 15, 15);
         var universe = CreateUniverse(seed);
 
         var generation129 = universe.GenerationAt(129, CancellationToken.None);
@@ -169,11 +200,11 @@ public sealed class UniverseOracleTests
         // published stabilisation generations (1103 for R-pentomino, 5206 for Acorn) assume an
         // unbounded grid, and both patterns emit escaping gliders that die at a bounded border
         // instead of departing forever. See docs/design.md §6.4.
-        var seed = PatternTestHelper.EmbedInGrid(rows, gridWidth: 60, gridHeight: 60, rowOffset: 25, colOffset: 25);
+        var seed = PatternTestHelper.EmbedInGrid(rows, 60, 60, 25, 25);
         var universe = CreateUniverse(seed);
 
-        var firstFate = universe.DetermineFate(iterationBudget: 5000, CancellationToken.None);
-        var secondFate = universe.DetermineFate(iterationBudget: 5000, CancellationToken.None);
+        var firstFate = universe.DetermineFate(5000, CancellationToken.None);
+        var secondFate = universe.DetermineFate(5000, CancellationToken.None);
 
         var stabilized = Assert.IsType<Fate.Stabilized>(firstFate);
         Assert.True(stabilized.AtGeneration >= 0);

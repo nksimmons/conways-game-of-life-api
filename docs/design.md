@@ -198,8 +198,9 @@ classDiagram
     }
     class Fate {
         <<union>>
-        +Stabilized(atGeneration, period)
-        +Undetermined(generationsExamined)
+        +long GenerationsComputed
+        +Stabilized(atGeneration, period, pattern, generationsComputed)
+        +Undetermined(generationsExamined, generationsComputed)
     }
     Universe o-- Pattern : seed
     Universe ..> ILifeRule
@@ -216,9 +217,21 @@ A still life is a `Stabilized` fate with a period of one. The literature treats 
 
 ### 4.2 Pattern, rather than raw indexing
 
-`Pattern` is the domain's name for an arrangement of cells. Its current storage is bit-packed in a `ulong[]` rather than a `bool[,]`. That buys three things: roughly 64 times less memory, which matters because seeds get serialized and persisted; cheap hashing for cycle detection, since hashing becomes a pass over the backing array rather than a nested loop; and room to vectorise neighbour counting later without disturbing the public surface.
+`Pattern` is the domain's name for an arrangement of cells. Its current storage is bit-packed in a `ulong[]` rather than a `bool[,]`. That buys three things: roughly eight times less cell-storage memory, which matters because seeds get serialized and persisted; cheap hashing for cycle detection, since hashing becomes a pass over the backing array rather than a nested loop; and room to vectorise neighbour counting later without disturbing the public surface. The earlier claim of 64 times less memory confused 64 cells per word with the saving relative to one byte per Boolean. At 256 by 256, the packed payload is 8 KiB rather than 64 KiB, excluding object headers and array padding.
 
 The bit manipulation is fully encapsulated. Consumers see `IsAlive(row, col)`, `Width`, `Height`, and `Population`, and no caller ever computes an offset. `Pattern` is a value object: immutable, structurally equal, no identity.
+
+The name was not the obvious one. `GenerationSnapshot` suggests itself, since most requests do return the arrangement at generation N. Three things ruled it out.
+
+The type is not always a generation. It is also the seed: `Universe.Seed`, `CreateUniverseCommand(UniverseId, Pattern Seed)`, and the result of `Pattern.FromRows` at the boundary all hold one before any generation has been computed. It is likewise the type of the published oracles in the tests, where Block and Glider are patterns in the literature's sense rather than snapshots of a run.
+
+Generation is already a separate thing in this model, an ordinal, and the pairing is explicit in `PatternView(UniverseId, int Generation, Pattern Pattern)`. Folding the ordinal into the type name would blur a distinction the code relies on, and the consequence is concrete rather than hypothetical. A blinker at generations 0 and 2 has identical cells, so those two patterns compare equal. That is correct, and under this name it reads as correct: the same arrangement, seen at two different generations. Under `GenerationSnapshot` the identical true statement, that two snapshots of different generations are equal, reads like a defect. [§5.5](#55-caching) describes the `ETag` collision this equality actually caused, which is what turned the argument from a stylistic preference into a demonstrated one.
+
+Finally, "snapshot" claims something untrue here. It implies a point-in-time capture of something that changes and, usually, something stored; the universe is an immutable seed and generations are computed rather than persisted. `GENERATION_SNAPSHOTS` is also the name of the checkpoint table that was designed and then cut ([§7.2](#72-schema), ADR 010), so the word is already spoken for by a rejected concept. Reusing it would invite the question of where these are kept, and the answer is nowhere, deliberately.
+
+The rule remains a question about a cell: is it alive in the next generation? `StandardLifeRule.NextState` expresses the two positive cases with a tuple switch: `(false, 3)` means birth and `(true, 2 or 3)` means survival; every other case is dead. I prefer that small rule table to a fluent builder here, because there is no requirement to compose rules dynamically. An enum would rename the two Boolean states without adding a domain distinction. `ILifeRule` remains the seam for another rule.
+
+Collection traversal uses `foreach`, with `WithIndex()` when both a value and its position matter. Pure projections, including HTTP rows, use LINQ. The evolution loop reuses column indices across rows, and both topologies iterate the same eight neighbour offsets without allocating per cell. Extensions such as `rule.Resolve()` and `errors.ToProblemDetails()` keep transformations next to their receiver; named factories such as `Pattern.FromRows` remain static.
 
 ### 4.3 Topology, and why it decides fate
 
@@ -320,7 +333,7 @@ ETag: "v1-<boardId>-<n>"
 Cache-Control: public, max-age=31536000, immutable
 ```
 
-`If-None-Match` is honoured and returns `304`. This follows directly from [§3](#3-the-governing-insight-determinism), and it is correct without any invalidation strategy, because nothing exists that could invalidate it.
+`If-None-Match` is honoured and returns `304`. GET uses weak comparison, so `W/"v1-<boardId>-<n>"` matches the corresponding strong validator; `*` matches an existing representation. The earlier strong-only comparison incorrectly returned `200` for those two cases. Existence and generation bounds are still checked, preserving `404` and `400`. This follows directly from [§3](#3-the-governing-insight-determinism), and it is correct without any invalidation strategy, because nothing exists that could invalidate it.
 
 The validator is derived from identity rather than from content, and the first implementation got this wrong in a way worth recording. It used `"sha256-<state-hash>"`, a hash of the returned pattern. That is appealing, since the content is what a validator is supposed to identify, but it fails twice. It collides: a blinker at generations 0 and 2 has identical cells but is a different representation, carrying a different `generation` and different `_links`, so two distinct representations shared one strong validator. And it is useless for load, because the hash can only be computed *after* evolving the pattern, so a conditional request paid the full cost and then threw the body away. Measured at the cap, a `304` took 0.97 s against 0.98 s for the `200`: it saved 132 KB of bandwidth and no CPU at all. `python3 bench/probe.py cache` reports both, and now shows 0.003 s against 0.98 s.
 
@@ -357,19 +370,23 @@ flowchart TD
 
 ### 6.2 Why a hash map, and why verify on hit
 
-Three approaches were considered:
+Three approaches were considered. Let A = width × height, K = ceiling(A / 64) packed words, and g be the number of forward evolution steps before a repeat. The table includes the working patterns, not just the detection bookkeeping. Compute bounds assume ordinary hash-table behaviour and no unequal patterns sharing a SHA-256 digest.
 
 | Approach | Memory | Compute | Gives cycle start? |
 |---|---|---|---|
-| Store every full state | O(g · w · h) | O(g) | Yes |
-| **Hash to generation index** | O(g) | O(g) | **Yes** |
-| Floyd / Brent cycle detection | O(1) | 2 to 3x | Only with a second pass |
+| Store every full state, indexed by hash | O((g + 1) · K) | O(g · A) | Yes |
+| **Hash to generation index** | O(K + g) | O(g · A), including one verification replay | **Yes** |
+| Floyd / Brent cycle detection | O(K) | O(g · A), with extra evolution passes | Only with a second pass |
 
-The hash map wins on the combination that matters here. It finds the cycle start in a single pass, which Floyd does not, and its memory scales with the generation count rather than with the grid area. Floyd's constant-memory property is attractive, but the budget already bounds the generation count, so the memory it saves is bounded anyway.
+The hash map wins on the combination that matters here. It identifies the candidate cycle start during the forward walk, then verifies it by replay. Its bookkeeping scales with the generation count rather than retaining a grid per generation. Floyd retains a constant number of patterns, not a constant number of bytes independent of area. The earlier table omitted the area factor from time and the working patterns from space; those omissions are corrected above.
 
-Collision verification is not optional. A hash hit is treated as a candidate only, and the full grid is compared before declaring a cycle. Skipping that step would mean a hash collision silently produces a wrong answer, which is the kind of correctness bug tests almost never catch, because it depends on hitting a specific collision. The cost is one comparison per candidate, and candidates are rare, so this is close to free.
+Collision verification is not optional. A hash hit is treated as a candidate only, and the full grid is compared before declaring a cycle. Skipping that step would mean a hash collision silently produces a wrong answer. The comparison itself costs O(K), but producing the candidate costs O(s · A), where s is the earlier generation index. A genuine cycle always triggers this replay, even though unequal patterns sharing a SHA-256 digest are extremely unlikely. The earlier description of replay as almost free was wrong.
 
-Only the hashes are retained during the walk, not the states. On a hash hit, the candidate generation is recomputed from the seed and compared. That trade matters more than it sounds: retaining every state for direct comparison would cost roughly 40 MB per in-flight request at the caps in [§10.1](#101-validation-and-input-bounds), and several hundred megabytes once admission control allows one evaluation per core. Retaining hashes alone costs a few hundred kilobytes. Since a 128-bit collision is vanishingly unlikely, the recomputation almost never happens, so its cost is amortised to nothing.
+Only the SHA-256 hashes and indices are retained during the walk, not a history of patterns. Retaining every packed state would cost roughly 40 MiB per in-flight request at the caps in [§10.1](#101-validation-and-input-bounds); hash bookkeeping costs a few hundred kilobytes instead. `Fate.Stabilized` now returns the already verified immutable pattern so the handler can include it without another replay. This is request-local reuse, not checkpointing, and GET still writes nothing.
+
+For a cycle starting at s with period p, the normal successful request now performs 2s + p evolution steps: s + p searching and s verifying. Previously the handler recomputed generation s again, costing 3s + p. `Fate.GenerationsComputed` counts actual steps, including every verification attempt, separately from the existing response's search-progress count. The duration metric covers all that evolution because it now happens entirely inside `DetermineFate`. A budget B exhausted without any hash hits performs max(0, B - 1) steps, since the seed is examined too. Pathological unequal-state hash matches could cause repeated replays and O(B² · A) work; the normal O(B · A) bound is not an unconditional worst-case guarantee.
+
+One `NextGeneration` takes O(A) time: eight neighbour positions per cell. `GenerationAt(n)` takes O(n · A) evolution time and O(K + width) auxiliary live storage, including reusable column indices, independent of n; total allocation over the call grows with n. Hashing and full equality take O(K), while HTTP `ToRows()` takes O(A) time and O(A) integer storage. No bit-parallel evolution is implemented.
 
 ### 6.3 The non-convergence contract
 
@@ -639,7 +656,7 @@ The two read endpoints are not symmetric, and I think that asymmetry is the crux
 
 So `final` is the endpoint that outgrows request/response first, and it should split alone. Generation N can stay synchronous indefinitely, because bounding the input bounds the work. Splitting both would be symmetry for its own sake.
 
-The trigger is specific: when the convergence budget has to rise far enough that a cold `final` evaluation no longer fits comfortably inside an HTTP request. At that point `final` becomes `POST /boards/{id}/final-state-jobs` returning `202` with a `Location`, and a worker pool consumes the queue. [§13.1](#131-when-the-synchronous-final-state-stops-being-enough) has the shape.
+The trigger is specific: when the convergence budget has to rise far enough that a cold `final` evaluation no longer fits comfortably inside an HTTP request. At that point `final` becomes `POST /boards/{id}/final-state-jobs` returning `202` with a `Location`, and a worker pool consumes the queue. [§13.1](#131-when-the-synchronous-final-stops-being-enough) has the shape.
 
 #### What immutability buys the queued version
 
@@ -837,13 +854,15 @@ Two corrections matter more than the numbers.
 
 The first is that the estimate priced a bit-parallel evolution step that was never written. `Pattern` does store cells bit-packed in a `ulong[]`, but `NextGeneration` visits one cell at a time through `ITopology.CountLiveNeighbors`. The packing buys memory density and cheap whole-state equality and hashing, which is exactly what cycle detection needs; it does not buy word-parallel neighbour counting. Counting 64 cells at once with full-adder arithmetic is a real technique and would plausibly close most of the gap, but it is not what this code does, and a design document should not claim an optimisation on the strength of the data structure that would merely permit it.
 
-The second is that `final` costs substantially more than its generation count suggests, because of the verification step in [§6.2](#62-why-a-hash-map-and-why-verify-on-hit). Detecting the repeat took 4,628 evolution steps, and confirming the candidate then replayed 4,626 more from the seed. That replay is roughly half of the 12.9 s. Its cost is proportional to where the cycle starts, so it is worst precisely for the long-lived seeds that make `final` worth asking about. It also puts a ceiling on the endpoint: a cycle detected just under the 5,000 budget would cost close to 10,000 evolution steps, so about 14 s is the worst this endpoint can currently do.
+The second is that `final` costs substantially more than its generation count suggests, because of the verification step in [§6.2](#62-why-a-hash-map-and-why-verify-on-hit). A later code review found an additional replay in the response handler that this explanation originally missed: 4,628 search steps plus 4,626 verification steps plus 4,626 response steps, or 13,880 steps. Returning the verified pattern removes the last replay, reducing that case to 9,254 steps. The 12.9 s result above predates that correction and is not a timing for the current implementation. Nor was the former claim of a 14 s worst-case ceiling justified by a single measurement.
 
 The conclusion the earlier draft drew does not survive its own numbers, so it is withdrawn rather than quietly amended. A `final` request at the cap is measured at about thirteen seconds of CPU, not a hundred milliseconds. Three things follow. Admission control is load-bearing rather than precautionary, since a handful of concurrent `final` requests can occupy every core for a noticeable interval; that is the mechanism in [§8.4](#84-concurrency-and-cpu-admission). The trigger in [§8.3](#83-service-boundaries) for moving `final` to a queued, asynchronous job is closer than this document previously implied, and on these numbers it is the single change I would make next. And ADR 010 deserves reopening on evidence that already exists: the replay-on-hit is repeated work against an immutable seed, which is the shape of problem a checkpoint actually solves, as distinct from the repeat-read caching case that ADR 010 declined.
 
-What has not changed is the caps themselves. They still bound a single request, and the measured worst case is bounded; thirteen seconds is unpleasant, not unbounded. Whether the `final` budget of 5,000 is the right ceiling given these timings is [§15](#15-open-questions-for-discussion)'s question rather than something to change silently here, since lowering it trades convergence coverage for latency and that trade deserves a decision rather than an edit.
+What has not changed is the caps themselves. They still bound a single request's computation, but measured examples are not proofs of maximum latency. Whether the `final` budget of 5,000 is the right ceiling is [§15](#15-open-questions-for-discussion)'s question rather than something to change silently here, since lowering it trades convergence coverage for latency and that trade deserves a decision rather than an edit. The endpoint measurements in this section are historical, before the replay and iteration refactors; they remain evidence for reassessing the synchronous budget, not current latency guarantees.
 
 #### Which input is actually the worst one
+
+The later iteration refactor was also checked with a smaller domain-only Release probe: a fixed `Random(42)` binary 256 by 256 seed, 100 generations, one warm-up and the median of three timed runs. The previous implementation took 113.07 ms and allocated 825,640 bytes; the `foreach` implementation took 113.86 ms and allocated 938,480 bytes. This short probe suggests similar throughput, not a statistically established performance win. The extra 112,840 allocated bytes include reusable-per-generation column arrays and range iterators. Packed cell storage remains 8,192 bytes per pattern. Allocated bytes are cumulative garbage-collector traffic, not peak live memory; this probe does not measure HTTP or final-state latency.
 
 The intuitive adversarial payload is a 256 by 256 grid with every cell set to 1. It is nearly the cheapest thing you can send. Measured at the cap:
 

@@ -33,7 +33,7 @@ public sealed class PatternTests
         var rows = new List<IReadOnlyList<int>>
         {
             new List<int> { 0, 1 },
-            new List<int> { 0 },
+            new List<int> { 0 }
         };
 
         Assert.Throws<ArgumentException>(() => Pattern.FromRows(rows));
@@ -44,7 +44,7 @@ public sealed class PatternTests
     {
         var rows = new List<IReadOnlyList<int>>
         {
-            new List<int> { 0, 2 },
+            new List<int> { 0, 2 }
         };
 
         Assert.Throws<ArgumentException>(() => Pattern.FromRows(rows));

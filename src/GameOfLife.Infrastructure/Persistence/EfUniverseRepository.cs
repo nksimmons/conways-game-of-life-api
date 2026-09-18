@@ -5,8 +5,8 @@ using Microsoft.EntityFrameworkCore;
 namespace GameOfLife.Infrastructure.Persistence;
 
 /// <summary>
-/// The only code in this repository that knows SQL exists. Translates between the domain
-/// <see cref="Universe"/> and its <see cref="UniverseRecord"/> persistence shape.
+///     The only code in this repository that knows SQL exists. Translates between the domain
+///     <see cref="Universe" /> and its <see cref="UniverseRecord" /> persistence shape.
 /// </summary>
 public sealed class EfUniverseRepository(GameOfLifeDbContext dbContext) : IUniverseRepository
 {
@@ -19,13 +19,9 @@ public sealed class EfUniverseRepository(GameOfLifeDbContext dbContext) : IUnive
         // it avoids the snapshot and identity-map bookkeeping EF would otherwise do for free.
         var record = await dbContext.Universes
             .AsNoTracking()
-            .FirstOrDefaultAsync(u => u.Id == id.Value, ct)
-            .ConfigureAwait(false);
+            .FirstOrDefaultAsync(u => u.Id == id.Value, ct);
 
-        if (record is null)
-        {
-            return null;
-        }
+        if (record is null) return null;
 
         var seed = Pattern.FromPackedBytes(record.Width, record.Height, record.SeedPacked);
         return new Universe(
@@ -50,10 +46,10 @@ public sealed class EfUniverseRepository(GameOfLifeDbContext dbContext) : IUnive
             RuleId = universe.Rule.Value,
             TopologyId = universe.Topology.Value,
             SeedPacked = [.. universe.Seed.PackedBytes],
-            CreatedAtUtc = universe.CreatedAtUtc,
+            CreatedAtUtc = universe.CreatedAtUtc
         };
 
         dbContext.Universes.Add(record);
-        await dbContext.SaveChangesAsync(ct).ConfigureAwait(false);
+        await dbContext.SaveChangesAsync(ct);
     }
 }

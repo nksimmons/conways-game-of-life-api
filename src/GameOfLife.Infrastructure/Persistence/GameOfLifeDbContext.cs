@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace GameOfLife.Infrastructure.Persistence;
 
+/// <summary>Entity Framework database context for persisting universe records.</summary>
 public sealed class GameOfLifeDbContext(DbContextOptions<GameOfLifeDbContext> options) : DbContext(options)
 {
     internal DbSet<UniverseRecord> Universes => Set<UniverseRecord>();

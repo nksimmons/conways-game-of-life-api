@@ -11,26 +11,29 @@ public sealed class LifeRuleTests
     [InlineData(true, 2, true)]
     [InlineData(true, 3, true)]
     [InlineData(true, 4, false)]
+    [InlineData(true, 5, false)]
+    [InlineData(true, 6, false)]
+    [InlineData(true, 7, false)]
     [InlineData(true, 8, false)]
+    [InlineData(false, 0, false)]
+    [InlineData(false, 1, false)]
     [InlineData(false, 2, false)]
     [InlineData(false, 3, true)]
     [InlineData(false, 4, false)]
-    public void StandardLifeRule_implements_B3S23(bool alive, int liveNeighbors, bool expected)
-    {
+    [InlineData(false, 5, false)]
+    [InlineData(false, 6, false)]
+    [InlineData(false, 7, false)]
+    [InlineData(false, 8, false)]
+    public void StandardLifeRule_implements_B3S23(bool alive, int liveNeighbors, bool expected) =>
         Assert.Equal(expected, StandardLifeRule.Instance.NextState(alive, liveNeighbors));
-    }
 
     [Fact]
-    public void LifeRules_resolves_the_standard_rule_id()
-    {
-        Assert.Same(StandardLifeRule.Instance, LifeRules.Resolve(RuleId.Standard));
-    }
+    public void LifeRules_resolves_the_standard_rule_id() =>
+        Assert.Same(StandardLifeRule.Instance, RuleId.Standard.Resolve());
 
     [Fact]
-    public void LifeRules_throws_for_an_unknown_rule_id()
-    {
-        Assert.Throws<InvalidOperationException>(() => LifeRules.Resolve(new RuleId("nonexistent")));
-    }
+    public void LifeRules_throws_for_an_unknown_rule_id() =>
+        Assert.Throws<InvalidOperationException>(() => new RuleId("nonexistent").Resolve());
 }
 
 public sealed class TopologyTests
@@ -67,13 +70,11 @@ public sealed class TopologyTests
     [Fact]
     public void Topologies_resolves_both_well_known_topologies()
     {
-        Assert.Same(BoundedTopology.Instance, Topologies.Resolve(TopologyId.Bounded));
-        Assert.Same(ToroidalTopology.Instance, Topologies.Resolve(TopologyId.Toroidal));
+        Assert.Same(BoundedTopology.Instance, TopologyId.Bounded.Resolve());
+        Assert.Same(ToroidalTopology.Instance, TopologyId.Toroidal.Resolve());
     }
 
     [Fact]
-    public void Topologies_throws_for_an_unknown_topology_id()
-    {
-        Assert.Throws<InvalidOperationException>(() => Topologies.Resolve(new TopologyId("nonexistent")));
-    }
+    public void Topologies_throws_for_an_unknown_topology_id() =>
+        Assert.Throws<InvalidOperationException>(() => new TopologyId("nonexistent").Resolve());
 }

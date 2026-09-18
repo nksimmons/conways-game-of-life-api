@@ -6,12 +6,17 @@ using Microsoft.EntityFrameworkCore;
 namespace GameOfLife.IntegrationTests;
 
 /// <summary>
-/// Exercises <see cref="EfUniverseRepository"/> against a real SQLite file, never the EF Core
-/// InMemory provider, because InMemory cannot prove durability and durability is the point.
+///     Exercises <see cref="EfUniverseRepository" /> against a real SQLite file, never the EF Core
+///     InMemory provider, because InMemory cannot prove durability and durability is the point.
 /// </summary>
 public sealed class SqliteUniverseRepositoryTests : IDisposable
 {
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"gameoflife-test-{Guid.NewGuid():N}.db");
+
+    public void Dispose()
+    {
+        if (File.Exists(_dbPath)) File.Delete(_dbPath);
+    }
 
     private GameOfLifeDbContext CreateContext()
     {
@@ -76,13 +81,5 @@ public sealed class SqliteUniverseRepositoryTests : IDisposable
         Assert.Equal(universe.Seed, found!.Seed);
         Assert.Equal(universe.Rule, found.Rule);
         Assert.Equal(universe.Topology, found.Topology);
-    }
-
-    public void Dispose()
-    {
-        if (File.Exists(_dbPath))
-        {
-            File.Delete(_dbPath);
-        }
     }
 }

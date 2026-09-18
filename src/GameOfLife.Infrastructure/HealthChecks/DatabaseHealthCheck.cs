@@ -10,7 +10,7 @@ public sealed class DatabaseHealthCheck(GameOfLifeDbContext dbContext) : IHealth
     {
         try
         {
-            var canConnect = await dbContext.Database.CanConnectAsync(ct).ConfigureAwait(false);
+            var canConnect = await dbContext.Database.CanConnectAsync(ct);
             return canConnect
                 ? HealthCheckResult.Healthy()
                 : HealthCheckResult.Unhealthy("The universe store is not reachable.");

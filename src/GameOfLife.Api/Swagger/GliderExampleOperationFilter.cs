@@ -5,10 +5,10 @@ using Swashbuckle.AspNetCore.SwaggerGen;
 namespace GameOfLife.Api.Swagger;
 
 /// <summary>
-/// Supplies a sample glider as the Swagger UI request body for board creation. An operation filter,
-/// not an attribute on <see cref="Contracts.UploadBoardRequest"/>, because Swashbuckle's built-in
-/// example support is schema-level: an attribute there would apply the same example to every action
-/// using that DTO. Filtering on the operation keeps it attached to the one operation it documents.
+///     Supplies a sample glider as the Swagger UI request body for board creation. An operation filter,
+///     not an attribute on <see cref="Contracts.UploadBoardRequest" />, because Swashbuckle's built-in
+///     example support is schema-level: an attribute there would apply the same example to every action
+///     using that DTO. Filtering on the operation keeps it attached to the one operation it documents.
 /// </summary>
 public sealed class GliderExampleOperationFilter : IOperationFilter
 {
@@ -24,18 +24,14 @@ public sealed class GliderExampleOperationFilter : IOperationFilter
             context.ApiDescription.RelativePath != "api/v1/boards" ||
             operation.RequestBody?.Content.TryGetValue("application/json", out var mediaType) != true ||
             mediaType is null)
-        {
             return;
-        }
 
         var rows = new OpenApiArray();
-        for (var row = 0; row < GridSize; row++)
+        foreach (var row in Enumerable.Range(0, GridSize))
         {
             var cells = new OpenApiArray();
-            for (var col = 0; col < GridSize; col++)
-            {
+            foreach (var col in Enumerable.Range(0, GridSize))
                 cells.Add(new OpenApiInteger(LiveCells.Contains((row, col)) ? 1 : 0));
-            }
 
             rows.Add(cells);
         }

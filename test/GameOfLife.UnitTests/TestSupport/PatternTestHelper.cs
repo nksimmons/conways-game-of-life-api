@@ -1,39 +1,28 @@
+using GameOfLife.Domain.Common;
 using GameOfLife.Domain.Domain;
 
 namespace GameOfLife.UnitTests.TestSupport;
 
-/// <summary>Builds a <see cref="Pattern"/> from an ASCII grid: 'O' is alive, anything else is dead.</summary>
+/// <summary>Builds a <see cref="Pattern" /> from an ASCII grid: 'O' is alive, anything else is dead.</summary>
 internal static class PatternTestHelper
 {
-    public static Pattern FromAscii(params string[] rows)
-    {
-        var grid = rows
+    public static Pattern FromAscii(params string[] rows) =>
+        Pattern.FromRows(rows
             .Select(row => (IReadOnlyList<int>)[.. row.Select(ch => ch == 'O' ? 1 : 0)])
-            .ToList();
+            .ToList());
 
-        return Pattern.FromRows(grid);
-    }
-
-    /// <summary>Embeds a small ASCII pattern into the top-left of a larger dead grid, so a spaceship or
-    /// methuselah has room to move without hitting the bounded edge during the generations under test.</summary>
+    /// <summary>
+    ///     Embeds a small ASCII pattern into the top-left of a larger dead grid, so a spaceship or
+    ///     methuselah has room to move without hitting the bounded edge during the generations under test.
+    /// </summary>
     public static Pattern EmbedInGrid(string[] rows, int gridWidth, int gridHeight, int rowOffset, int colOffset)
     {
-        var grid = new int[gridHeight][];
-        for (var r = 0; r < gridHeight; r++)
-        {
-            grid[r] = new int[gridWidth];
-        }
+        var grid = Enumerable.Range(0, gridHeight).Select(_ => new int[gridWidth]).ToArray();
 
-        for (var r = 0; r < rows.Length; r++)
-        {
-            for (var c = 0; c < rows[r].Length; c++)
-            {
-                if (rows[r][c] == 'O')
-                {
+        foreach (var (row, r) in rows.WithIndex())
+            foreach (var (cell, c) in row.WithIndex())
+                if (cell == 'O')
                     grid[r + rowOffset][c + colOffset] = 1;
-                }
-            }
-        }
 
         return Pattern.FromRows([.. grid.Select(row => (IReadOnlyList<int>)row)]);
     }

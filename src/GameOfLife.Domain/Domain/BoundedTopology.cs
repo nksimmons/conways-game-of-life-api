@@ -18,27 +18,14 @@ public sealed class BoundedTopology : ITopology
         ArgumentNullException.ThrowIfNull(pattern);
 
         var count = 0;
-        for (var deltaRow = -1; deltaRow <= 1; deltaRow++)
+        foreach (var (deltaRow, deltaCol) in Topologies.NeighborOffsets)
         {
-            for (var deltaCol = -1; deltaCol <= 1; deltaCol++)
-            {
-                if (deltaRow == 0 && deltaCol == 0)
-                {
-                    continue;
-                }
+            var neighborRow = row + deltaRow;
+            var neighborCol = col + deltaCol;
+            if (neighborRow < 0 || neighborRow >= pattern.Height || neighborCol < 0 ||
+                neighborCol >= pattern.Width) continue;
 
-                var neighborRow = row + deltaRow;
-                var neighborCol = col + deltaCol;
-                if (neighborRow < 0 || neighborRow >= pattern.Height || neighborCol < 0 || neighborCol >= pattern.Width)
-                {
-                    continue;
-                }
-
-                if (pattern.IsAlive(neighborRow, neighborCol))
-                {
-                    count++;
-                }
-            }
+            if (pattern.IsAlive(neighborRow, neighborCol)) count++;
         }
 
         return count;

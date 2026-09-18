@@ -1,6 +1,7 @@
 using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using GameOfLife.Api.Contracts;
 
@@ -12,15 +13,16 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
 
     private readonly HttpClient _client = factory.CreateClient();
 
-    private static object BlinkerRequestBody() => new
-    {
-        cells = new[]
+    private static object BlinkerRequestBody() =>
+        new
         {
-            new[] { 0, 0, 0 },
-            new[] { 1, 1, 1 },
-            new[] { 0, 0, 0 },
-        },
-    };
+            cells = new[]
+            {
+                new[] { 0, 0, 0 },
+                new[] { 1, 1, 1 },
+                new[] { 0, 0, 0 }
+            }
+        };
 
     private async Task<BoardCreatedResponse> CreateBoardAsync()
     {
@@ -78,7 +80,7 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
     [InlineData("""{"cells":[]}""")] // empty
     public async Task CreateBoard_rejects_invalid_input_with_400_problem_details(string json)
     {
-        using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
         var response = await _client.PostAsync("/api/v1/boards", content);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -86,15 +88,18 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
     }
 
     /// <summary>
-    /// Model binding and FluentValidation both produce 400s, and they used to produce different
-    /// bodies: different type URIs, titles, and error keys for the same class of failure.
+    ///     Model binding and FluentValidation both produce 400s, and they used to produce different
+    ///     bodies: different type URIs, titles, and error keys for the same class of failure.
     /// </summary>
     [Theory]
     [InlineData("""{"cells":[["a"]]}""")] // fails during model binding
     [InlineData("""{"cells":[[0,1],[0]]}""")] // fails a validation rule
+    [InlineData("""{"cells":[[0,1],null]}""")]
+    [InlineData("""{"cells":[null,[0,1]]}""")]
+    [InlineData("""{"cells":[[0,1],null,[1,0]]}""")]
     public async Task Invalid_requests_share_one_problem_shape(string json)
     {
-        using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
         var response = await _client.PostAsync("/api/v1/boards", content);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -109,8 +114,8 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
     }
 
     /// <summary>
-    /// The body parameter and <c>Cells</c> are both non-nullable, so MVC rejects these during binding
-    /// and neither the validator nor the controller carries a null case.
+    ///     The body parameter and <c>Cells</c> are both non-nullable, so MVC rejects these during binding
+    ///     and neither the validator nor the controller carries a null case.
     /// </summary>
     [Theory]
     [InlineData("")] // no body at all
@@ -119,7 +124,7 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
     [InlineData("{}")] // cells absent
     public async Task CreateBoard_rejects_a_null_or_absent_body(string json)
     {
-        using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
         var response = await _client.PostAsync("/api/v1/boards", content);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -131,16 +136,13 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
             document.RootElement.GetProperty("type").GetString());
 
         // An empty key is not something a client can act on, so the factory rebinds it to "body".
-        foreach (var error in document.RootElement.GetProperty("errors").EnumerateObject())
-        {
-            Assert.NotEmpty(error.Name);
-        }
+        foreach (var error in document.RootElement.GetProperty("errors").EnumerateObject()) Assert.NotEmpty(error.Name);
     }
 
     [Fact]
     public async Task A_binding_failure_does_not_leak_framework_internals()
     {
-        using var content = new StringContent("""{"cells":[["a"]]}""", System.Text.Encoding.UTF8, "application/json");
+        using var content = new StringContent("""{"cells":[["a"]]}""", Encoding.UTF8, "application/json");
         var response = await _client.PostAsync("/api/v1/boards", content);
 
         var body = await response.Content.ReadAsStringAsync();
@@ -228,28 +230,33 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
     }
 
     /// <summary>
-    /// The point of deriving the validator from identity rather than content: a conditional request
-    /// must be answerable without evolving anything. Asserted on the generations-computed counter
-    /// rather than on elapsed time, so it states the actual claim instead of a timing coincidence.
+    ///     The point of deriving the validator from identity rather than content: a conditional request
+    ///     must be answerable without evolving anything. Asserted on the generations-computed counter
+    ///     rather than on elapsed time, so it states the actual claim instead of a timing coincidence.
     /// </summary>
-    [Fact]
-    public async Task Conditional_generation_request_does_not_run_the_evolution_loop()
+    [Theory]
+    [InlineData("strong", "generations/25", 25)]
+    [InlineData("weak", "generations/25", 25)]
+    [InlineData("wildcard", "generations/25", 25)]
+    [InlineData("list", "generations/25", 25)]
+    [InlineData("weak", "next", 1)]
+    [InlineData("wildcard", "next", 1)]
+    public async Task Conditional_generation_request_does_not_run_the_evolution_loop(string validator, string route,
+        int generation)
     {
         var created = await CreateBoardAsync();
-        var url = $"/api/v1/boards/{created.BoardId}/generations/25";
+        var url = $"/api/v1/boards/{created.BoardId}/{route}";
 
         var generationsComputed = 0L;
         using var listener = new MeterListener
         {
             InstrumentPublished = (instrument, l) =>
             {
-                if (instrument.Name == "gameoflife.generations_computed")
-                {
-                    l.EnableMeasurementEvents(instrument);
-                }
-            },
+                if (instrument.Name == "gameoflife.generations_computed") l.EnableMeasurementEvents(instrument);
+            }
         };
-        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref generationsComputed, measurement));
+        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) =>
+            Interlocked.Add(ref generationsComputed, measurement));
         listener.Start();
 
         var unconditional = await _client.GetAsync(url);
@@ -257,17 +264,26 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
         var etag = unconditional.Headers.ETag!.ToString();
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.TryAddWithoutValidation("If-None-Match", etag);
+        request.Headers.TryAddWithoutValidation("If-None-Match", validator switch
+        {
+            "weak" => $"W/{etag}",
+            "wildcard" => "*",
+            "list" => $"\"different\", W/{etag}",
+            _ => etag
+        });
         var conditional = await _client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.NotModified, conditional.StatusCode);
-        Assert.Equal(25, afterUnconditional);
+        Assert.Equal(generation, afterUnconditional);
         Assert.Equal(afterUnconditional, Interlocked.Read(ref generationsComputed));
+        Assert.Equal(unconditional.Headers.ETag, conditional.Headers.ETag);
+        Assert.Contains("immutable", conditional.Headers.CacheControl?.ToString());
+        Assert.Empty(await conditional.Content.ReadAsByteArrayAsync());
     }
 
     /// <summary>
-    /// A content-derived validator collided here: a blinker at generations 0 and 2 has identical
-    /// cells, but they are different representations with different `generation` and `_links` values.
+    ///     A content-derived validator collided here: a blinker at generations 0 and 2 has identical
+    ///     cells, but they are different representations with different `generation` and `_links` values.
     /// </summary>
     [Fact]
     public async Task Generations_with_identical_cells_still_get_distinct_etags()
@@ -284,25 +300,38 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
         Assert.NotEqual(zero.Headers.ETag!.Tag, two.Headers.ETag!.Tag);
     }
 
-    [Fact]
-    public async Task A_fabricated_validator_for_an_unknown_board_is_404_not_304()
+    [Theory]
+    [InlineData("strong")]
+    [InlineData("weak")]
+    [InlineData("wildcard")]
+    public async Task A_fabricated_validator_for_an_unknown_board_is_404_not_304(string validator)
     {
         var unknown = Guid.NewGuid();
 
         using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/boards/{unknown}/generations/1");
-        request.Headers.TryAddWithoutValidation("If-None-Match", $"\"v1-{unknown}-1\"");
+        request.Headers.TryAddWithoutValidation("If-None-Match", validator switch
+        {
+            "weak" => $"W/\"v1-{unknown}-1\"",
+            "wildcard" => "*",
+            _ => $"\"v1-{unknown}-1\""
+        });
         var response = await _client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
     }
 
-    [Fact]
-    public async Task GetGeneration_rejects_an_out_of_range_index_with_400()
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(1001)]
+    public async Task GetGeneration_rejects_an_out_of_range_index_with_400(int generation)
     {
         var created = await CreateBoardAsync();
 
-        var response = await _client.GetAsync($"/api/v1/boards/{created.BoardId}/generations/999999");
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"/api/v1/boards/{created.BoardId}/generations/{generation}");
+        request.Headers.TryAddWithoutValidation("If-None-Match", "*");
+        var response = await _client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -312,8 +341,11 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
     {
         var created = await CreateBoardAsync();
 
-        var next = await _client.GetFromJsonAsync<GenerationResponse>($"/api/v1/boards/{created.BoardId}/next", JsonOptions);
-        var generationOne = await _client.GetFromJsonAsync<GenerationResponse>($"/api/v1/boards/{created.BoardId}/generations/1", JsonOptions);
+        var next = await _client.GetFromJsonAsync<GenerationResponse>($"/api/v1/boards/{created.BoardId}/next",
+            JsonOptions);
+        var generationOne =
+            await _client.GetFromJsonAsync<GenerationResponse>($"/api/v1/boards/{created.BoardId}/generations/1",
+                JsonOptions);
 
         Assert.Equal(generationOne!.Cells, next!.Cells);
     }
@@ -331,6 +363,52 @@ public sealed class BoardsControllerTests(GameOfLifeApiFactory factory) : IClass
         Assert.Equal(0, body!.StabilizedAtGeneration);
         Assert.Equal(2, body.Period);
         Assert.Equal(3, body.Population);
+    }
+
+    [Fact]
+    public async Task A_nonmatching_weak_validator_returns_the_generation()
+    {
+        var created = await CreateBoardAsync();
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/boards/{created.BoardId}/generations/1");
+        request.Headers.TryAddWithoutValidation("If-None-Match", "W/\"different\"");
+
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<GenerationResponse>(JsonOptions);
+        Assert.NotNull(body);
+        Assert.Equal(1, body.Generation);
+    }
+
+    [Fact]
+    public async Task GetFinalState_counts_search_and_verification_steps()
+    {
+        var created = await _client.PostAsJsonAsync("/api/v1/boards", new { cells = new[] { new[] { 1 } } });
+        created.EnsureSuccessStatusCode();
+        Assert.NotNull(created.Headers.Location);
+
+        long generationsComputed = 0;
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, l) =>
+            {
+                if (instrument.Name == "gameoflife.generations_computed") l.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) =>
+            Interlocked.Add(ref generationsComputed, measurement));
+        listener.Start();
+
+        var response = await _client.GetAsync($"{created.Headers.Location}/final");
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<FinalStateResponse>(JsonOptions);
+        Assert.NotNull(body);
+        Assert.Equal(1, body.StabilizedAtGeneration);
+        Assert.Equal(1, body.Period);
+        Assert.Equal(0, body.Population);
+        Assert.Equal(new[] { new[] { 0 } }, body.Cells);
+        Assert.Equal(3, Interlocked.Read(ref generationsComputed));
     }
 
     [Fact]

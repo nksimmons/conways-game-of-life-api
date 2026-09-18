@@ -1,16 +1,16 @@
-using GameOfLife.Domain.Observability;
-using GameOfLife.Infrastructure;
-using GameOfLife.Application;
-using GameOfLife.Application.CreateUniverse;
-using GameOfLife.Application.GetFinalState;
-using GameOfLife.Application.GetGeneration;
-using GameOfLife.Application.GetUniverse;
+using FluentValidation;
 using GameOfLife.Api.Controllers;
 using GameOfLife.Api.ErrorHandling;
 using GameOfLife.Api.Options;
 using GameOfLife.Api.Swagger;
 using GameOfLife.Api.Validation;
-using FluentValidation;
+using GameOfLife.Application;
+using GameOfLife.Application.CreateUniverse;
+using GameOfLife.Application.GetFinalState;
+using GameOfLife.Application.GetGeneration;
+using GameOfLife.Application.GetUniverse;
+using GameOfLife.Domain.Observability;
+using GameOfLife.Infrastructure;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -32,7 +32,7 @@ builder.Host.UseDefaultServiceProvider(options =>
     options.ValidateScopes = true;
 });
 
-builder.Host.UseSerilog((context, services, configuration) => configuration
+builder.Host.UseSerilog((context, _, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
     .Enrich.FromLogContext()
     .WriteTo.Console(new JsonFormatter()));
@@ -43,9 +43,9 @@ builder.Services.AddControllers().AddControllersAsServices();
 // factory also strips the binder's default text, which names CLR types and JSON byte offsets.
 builder.Services.Configure<ApiBehaviorOptions>(options =>
     options.InvalidModelStateResponseFactory = context =>
-        new BadRequestObjectResult(ValidationProblems.Create(context.ModelState))
+        new BadRequestObjectResult(context.ModelState.ToProblemDetails())
         {
-            ContentTypes = { "application/problem+json" },
+            ContentTypes = { "application/problem+json" }
         });
 
 // Validators are invoked explicitly by the controller. FluentValidation deprecated its MVC
@@ -72,7 +72,7 @@ builder.Services.AddScoped<IQueryHandler<GetFinalStateQuery, FinalStateView>, Ge
 builder.Services.AddInfrastructure(builder.Configuration);
 
 builder.Services.AddHealthChecks()
-    .AddCheck("self", () => HealthCheckResult.Healthy(), tags: ["live"]);
+    .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);
 
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
@@ -97,7 +97,7 @@ builder.Services.AddOpenTelemetry()
 builder.Services.AddRateLimiter(options =>
 {
     var permits = gameOfLifeSection.Get<GameOfLifeOptions>()?.ResolvedMaxConcurrentEvaluations
-        ?? Environment.ProcessorCount;
+                  ?? Environment.ProcessorCount;
 
     options.AddConcurrencyLimiter(BoardsController.EvaluationPolicy, limiter =>
     {
@@ -115,7 +115,7 @@ builder.Services.AddRateLimiter(options =>
                 Type = "https://gameoflife.example/problems/admission-rejected",
                 Title = "The server is at capacity.",
                 Status = StatusCodes.Status503ServiceUnavailable,
-                Detail = "Too many evaluations are in progress. Retry shortly.",
+                Detail = "Too many evaluations are in progress. Retry shortly."
             },
             options: null,
             contentType: "application/problem+json",
@@ -144,16 +144,19 @@ app.MapControllers();
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
-    Predicate = check => check.Tags.Contains("live"),
+    Predicate = check => check.Tags.Contains("live")
 });
 app.MapHealthChecks("/health/ready", new HealthCheckOptions
 {
-    Predicate = check => check.Tags.Contains("ready"),
+    Predicate = check => check.Tags.Contains("ready")
 });
 
 app.Run();
 
-/// <summary>Entry point partial class, exposed so <c>WebApplicationFactory&lt;Program&gt;</c> can bootstrap it in functional tests.</summary>
+/// <summary>
+///     Entry point partial class, exposed so <c>WebApplicationFactory&lt;Program&gt;</c> can bootstrap it in
+///     functional tests.
+/// </summary>
 public partial class Program
 {
 }

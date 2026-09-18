@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 
 namespace GameOfLife.Domain.Domain;
 
-/// <summary>A 256-bit SHA-256 digest of a <see cref="Pattern"/>, used as a cheap dictionary key for cycle detection.</summary>
+/// <summary>A 256-bit SHA-256 digest of a <see cref="Pattern" />, used as a cheap dictionary key for cycle detection.</summary>
 public readonly struct StateHash : IEquatable<StateHash>
 {
     // Four ulongs rather than a byte[32] because this is constructed once per generation inside the
@@ -23,10 +23,7 @@ public readonly struct StateHash : IEquatable<StateHash>
 
     public static StateHash FromSha256Digest(ReadOnlySpan<byte> digest)
     {
-        if (digest.Length != 32)
-        {
-            throw new ArgumentException("A SHA-256 digest is exactly 32 bytes.", nameof(digest));
-        }
+        if (digest.Length != 32) throw new ArgumentException("A SHA-256 digest is exactly 32 bytes.", nameof(digest));
 
         return new StateHash(
             BinaryPrimitives.ReadUInt64LittleEndian(digest[..8]),

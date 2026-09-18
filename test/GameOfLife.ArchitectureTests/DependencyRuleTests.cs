@@ -3,8 +3,8 @@ using NetArchTest.Rules;
 namespace GameOfLife.ArchitectureTests;
 
 /// <summary>
-/// Asserts the dependency rule from AGENTS.md §1.1. If a project reference breaks the rule, these
-/// tests fail; they are not to be relaxed or deleted to make a change compile.
+///     Asserts the dependency rule from AGENTS.md §1.1. If a project reference breaks the rule, these
+///     tests fail; they are not to be relaxed or deleted to make a change compile.
 /// </summary>
 public sealed class DependencyRuleTests
 {

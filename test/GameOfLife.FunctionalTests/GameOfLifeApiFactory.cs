@@ -12,9 +12,11 @@ namespace GameOfLife.FunctionalTests;
 /// <summary>Boots the real Web host against a unique, throwaway SQLite file per test class instance.</summary>
 public class GameOfLifeApiFactory : WebApplicationFactory<Program>
 {
-    public string DatabasePath { get; } = Path.Combine(Path.GetTempPath(), $"gameoflife-functional-{Guid.NewGuid():N}.db");
+    public string DatabasePath { get; } =
+        Path.Combine(Path.GetTempPath(), $"gameoflife-functional-{Guid.NewGuid():N}.db");
 
-    protected virtual IReadOnlyDictionary<string, string?> ConfigurationOverrides { get; } = new Dictionary<string, string?>();
+    protected virtual IReadOnlyDictionary<string, string?> ConfigurationOverrides { get; } =
+        new Dictionary<string, string?>();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -22,7 +24,7 @@ public class GameOfLifeApiFactory : WebApplicationFactory<Program>
         {
             var settings = new Dictionary<string, string?>(ConfigurationOverrides)
             {
-                ["ConnectionStrings:GameOfLife"] = $"Data Source={DatabasePath}",
+                ["ConnectionStrings:GameOfLife"] = $"Data Source={DatabasePath}"
             };
             config.AddInMemoryCollection(settings);
         });
@@ -31,9 +33,6 @@ public class GameOfLifeApiFactory : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        if (disposing && File.Exists(DatabasePath))
-        {
-            File.Delete(DatabasePath);
-        }
+        if (disposing && File.Exists(DatabasePath)) File.Delete(DatabasePath);
     }
 }
