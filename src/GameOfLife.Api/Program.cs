@@ -10,6 +10,7 @@ using GameOfLife.Application.GetFinalState;
 using GameOfLife.Application.GetGeneration;
 using GameOfLife.Application.GetUniverse;
 using GameOfLife.Domain.Observability;
+using GameOfLife.Domain.Rules;
 using GameOfLife.Infrastructure;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Mvc;
@@ -19,6 +20,7 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using Serilog;
+using Serilog.Events;
 using Serilog.Formatting.Json;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -32,10 +34,26 @@ builder.Host.UseDefaultServiceProvider(options =>
     options.ValidateScopes = true;
 });
 
-builder.Host.UseSerilog((context, _, configuration) => configuration
-    .ReadFrom.Configuration(context.Configuration)
-    .Enrich.FromLogContext()
-    .WriteTo.Console(new JsonFormatter()));
+// Levels come from the Serilog section of appsettings, which differs per environment: Debug for our
+// own code in Development and Staging, Information in Production, with the framework held at Warning
+// everywhere except lifetime messages. The rendered console is for a human reading a terminal;
+// anything else is a log aggregator that has to parse it, so it gets JSON.
+builder.Host.UseSerilog((context, _, configuration) =>
+{
+    configuration
+        .ReadFrom.Configuration(context.Configuration)
+        .Enrich.FromLogContext()
+        .Enrich.WithProperty("Environment", context.HostingEnvironment.EnvironmentName);
+
+    if (context.HostingEnvironment.IsDevelopment())
+    {
+        configuration.WriteTo.Console();
+    }
+    else
+    {
+        configuration.WriteTo.Console(new JsonFormatter());
+    }
+});
 
 builder.Services.AddControllers().AddControllersAsServices();
 
@@ -62,6 +80,8 @@ builder.Services
     .AddOptions<GameOfLifeOptions>()
     .Bind(gameOfLifeSection)
     .ValidateDataAnnotations()
+    .Validate(options => new RuleId(options.DefaultRule).IsSupported(),
+        "GameOfLife:DefaultRule must identify a supported Life rule.")
     .ValidateOnStart();
 
 builder.Services.AddScoped<ICommandHandler<CreateUniverseCommand>, CreateUniverseCommandHandler>();
@@ -77,23 +97,44 @@ builder.Services.AddHealthChecks()
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
+// The console exporter prints every span and every metric to stdout. That is useful when the console
+// is a developer's terminal and indefensible when it is a log pipeline billed by volume, so it is
+// configuration-driven and off outside Development. Swapping in OTLP is an exporter change and
+// nothing more, which is the point of instrumenting against OpenTelemetry rather than a vendor SDK
+// (README.md §9).
+var useConsoleExporter = builder.Configuration.GetValue("Telemetry:ConsoleExporter", false);
+
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(resource => resource.AddService(GameOfLifeDiagnostics.Name))
-    .WithTracing(tracing => tracing
-        .AddAspNetCoreInstrumentation()
-        .AddHttpClientInstrumentation()
-        .AddSource(GameOfLifeDiagnostics.Name)
-        .AddConsoleExporter())
-    .WithMetrics(metrics => metrics
-        .AddAspNetCoreInstrumentation()
-        .AddMeter(GameOfLifeDiagnostics.Name)
-        .AddMeter("Microsoft.AspNetCore.RateLimiting")
-        .AddConsoleExporter());
+    .WithTracing(tracing =>
+    {
+        tracing
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddSource(GameOfLifeDiagnostics.Name);
+
+        if (useConsoleExporter)
+        {
+            tracing.AddConsoleExporter();
+        }
+    })
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .AddAspNetCoreInstrumentation()
+            .AddMeter(GameOfLifeDiagnostics.Name)
+            .AddMeter("Microsoft.AspNetCore.RateLimiting");
+
+        if (useConsoleExporter)
+        {
+            metrics.AddConsoleExporter();
+        }
+    });
 
 // The one admission control in the process: it bounds how many CPU-bound evaluations run at once,
 // which the input caps in GameOfLifeOptions cannot do (those bound the cost of a single request).
 // QueueLimit 0 rejects immediately rather than queueing, because a request answered after the client
-// has given up has cost a core for nothing. See docs/design.md §8.4.
+// has given up has cost a core for nothing. See README.md §8.4.
 builder.Services.AddRateLimiter(options =>
 {
     var permits = gameOfLifeSection.Get<GameOfLifeOptions>()?.ResolvedMaxConcurrentEvaluations
@@ -127,7 +168,19 @@ var app = builder.Build();
 
 app.Services.EnsureDatabaseCreated();
 
-app.UseSerilogRequestLogging();
+// Request logging is the one line per request that matters, so its level is chosen rather than fixed.
+// Health probes run every few seconds forever and say nothing when they pass, so they drop below the
+// floor in every environment; a 4xx is the caller's problem and a 5xx is ours.
+app.UseSerilogRequestLogging(options =>
+{
+    options.GetLevel = (httpContext, _, exception) => exception is not null || httpContext.Response.StatusCode >= 500
+        ? LogEventLevel.Error
+        : httpContext.Response.StatusCode >= 400
+            ? LogEventLevel.Warning
+            : httpContext.Request.Path.StartsWithSegments("/health")
+                ? LogEventLevel.Verbose
+                : LogEventLevel.Information;
+});
 
 if (app.Environment.IsDevelopment())
 {
@@ -137,7 +190,14 @@ if (app.Environment.IsDevelopment())
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
-app.UseHttpsRedirection();
+
+// Off by default because the deployed topology terminates TLS at the ingress. With no HTTPS port to
+// find, this middleware redirects nothing and logs a warning for every request that passes through it.
+if (app.Configuration.GetValue("HttpsRedirection:Enabled", false))
+{
+    app.UseHttpsRedirection();
+}
+
 app.UseRateLimiter();
 
 app.MapControllers();

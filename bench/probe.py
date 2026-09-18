@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Boundary and load harness for the Game of Life API.
 
-Every measured number quoted in docs/design.md comes from one of these subcommands.
+The historical HTTP measurements in README.md can be rerun with these subcommands.
 The design document states them as facts, so they need to be reproducible rather
 than remembered. Standard library only, so there is nothing to install.
 
@@ -79,7 +79,7 @@ def grid(fill, seed=None):
 
 # --------------------------------------------------------------------- validate
 def validate(client: Client) -> int:
-    """Hostile and malformed payloads. Backs docs/design.md §10.5."""
+    """Hostile and malformed payloads. Backs README.md §10.5."""
     over = [0] * (CAP + 1)
     body_cases = [
         ("missing cells key", {}, 400),
@@ -183,7 +183,7 @@ def load(client: Client) -> int:
 
 # ------------------------------------------------------------------------ cache
 def cache(client: Client) -> int:
-    """Cost of a conditional request. Backs docs/design.md §5.5."""
+    """Cost of a conditional request. Backs README.md §5.5."""
     board = client.create(grid("0.5", seed=11))
     base = f"/api/v1/boards/{board}/generations/1000"
     for _ in range(3):

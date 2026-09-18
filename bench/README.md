@@ -1,11 +1,13 @@
 # bench
 
-`docs/design.md` quotes measured numbers. This is how they were produced, so a reader can check them rather than take them on trust.
+The [README](../README.md#1011-what-evaluation-actually-costs) records historical HTTP measurements. These probes let a reader rerun those experiments against the current implementation; the separate domain-only allocation probe is not part of this script.
 
 Standard library Python only, nothing to install. Start the API in **Release** first, because Debug timings are several times slower and are not what the document reports:
 
 ```bash
-dotnet run -c Release --project src/GameOfLife.Api --no-launch-profile
+DOTNET_ENVIRONMENT=Staging Persistence__Provider=Sqlite \
+  ConnectionStrings__GameOfLife="Data Source=gameoflife-bench.db" \
+  dotnet run -c Release --project src/GameOfLife.Api --no-launch-profile --urls http://localhost:5000
 python3 bench/probe.py all --base http://localhost:5000
 ```
 
@@ -19,3 +21,5 @@ python3 bench/probe.py all --base http://localhost:5000
 `validate` exits non-zero if any probe returns an unexpected status, so it can gate a pipeline. The timing subcommands always exit zero: they report, and a human decides whether the numbers are acceptable.
 
 Grid seeds are fixed, so generation counts reproduce exactly; wall-clock times will differ by machine. `saturate` is the one to re-run after changing `MaxConcurrentEvaluations`, since it is the check that a saturated node still answers its health probe.
+
+Staging keeps the console telemetry exporter and HTTPS redirection off. The explicit SQLite override avoids the Production Postgres default when using `--no-launch-profile`.

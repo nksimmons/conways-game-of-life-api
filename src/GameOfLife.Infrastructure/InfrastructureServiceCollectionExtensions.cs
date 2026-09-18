@@ -15,7 +15,7 @@ public static class InfrastructureServiceCollectionExtensions
     /// <summary>
     ///     Registers the EF Core adapter for <see cref="IUniverseRepository" />. Provider is chosen by
     ///     configuration (<c>Persistence:Provider</c> = <c>Sqlite</c>, the default, or <c>Postgres</c>);
-    ///     see docs/design.md §7.3 for why SQLite is the default and what would change it.
+    ///     see README.md §7.3 for why SQLite is the default and what would change it.
     /// </summary>
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {

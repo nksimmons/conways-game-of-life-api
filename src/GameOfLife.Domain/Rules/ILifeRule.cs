@@ -1,4 +1,4 @@
-namespace GameOfLife.Domain.Domain;
+namespace GameOfLife.Domain.Rules;
 
 /// <summary>The evolution rule: whether a cell lives, dies, or is born given its current state and live-neighbour count.</summary>
 public interface ILifeRule

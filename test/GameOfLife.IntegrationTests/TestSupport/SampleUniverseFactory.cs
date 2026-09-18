@@ -1,4 +1,5 @@
 using GameOfLife.Domain.Domain;
+using GameOfLife.Domain.Rules;
 
 namespace GameOfLife.IntegrationTests.TestSupport;
 

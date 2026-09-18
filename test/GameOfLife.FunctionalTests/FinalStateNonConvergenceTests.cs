@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace GameOfLife.FunctionalTests;
 
 /// <summary>
-///     The 422 contract from docs/design.md §6.3, exercised by shrinking the server-configured budget
+///     The 422 contract from README.md §6.3, exercised by shrinking the server-configured budget
 ///     rather than by a pattern that outlasts the default. On a bounded grid the published methuselahs
 ///     (Acorn included) settle well inside 5000 generations, so the default budget cannot be exceeded by a
 ///     legitimately sized input; a small budget is the honest way to reach this path.

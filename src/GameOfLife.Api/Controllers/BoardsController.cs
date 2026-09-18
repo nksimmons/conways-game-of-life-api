@@ -11,6 +11,7 @@ using GameOfLife.Application.GetGeneration;
 using GameOfLife.Application.GetUniverse;
 using GameOfLife.Domain.Common;
 using GameOfLife.Domain.Domain;
+using GameOfLife.Domain.Rules;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
@@ -55,7 +56,7 @@ public sealed class BoardsController(
         var seed = Pattern.FromRows(board.Cells);
         var id = UniverseId.NewId();
 
-        await createHandler.HandleAsync(new CreateUniverseCommand(id, seed), ct);
+        await createHandler.HandleAsync(new CreateUniverseCommand(id, seed, new RuleId(_options.DefaultRule)), ct);
 
         var response = new BoardCreatedResponse(id.ToString(), seed.Width, seed.Height, seed.Population,
             BuildBoardLinks(id.Value));
@@ -85,16 +86,14 @@ public sealed class BoardsController(
     [HttpGet("{id:guid}/generations/{n:int}", Name = "GetGeneration")]
     [EnableRateLimiting(EvaluationPolicy)]
     [GenerationETag]
-    public async Task<IActionResult> GetGeneration(Guid id, int n, CancellationToken ct)
-    {
+    public async Task<IActionResult> GetGeneration(Guid id, int n, CancellationToken ct) =>
         // A single scalar bound from the route, so a validator class would be more ceremony than rule.
-        return n < 0 || n > _options.MaxGenerationsAhead
+        n < 0 || n > _options.MaxGenerationsAhead
             ? BadRequest(new Dictionary<string, string[]>
             {
                 ["n"] = [$"n must be between 0 and {_options.MaxGenerationsAhead}."]
             }.ToProblemDetails())
             : await GenerationAsync(id, n, ct);
-    }
 
     [HttpGet("{id:guid}/next", Name = "GetNextGeneration")]
     [EnableRateLimiting(EvaluationPolicy)]
@@ -181,12 +180,6 @@ public sealed class BoardsController(
         linkGenerator.GetPathByName(HttpContext, routeName, values)
         ?? throw new InvalidOperationException($"Route '{routeName}' is not registered.");
 
-    private static IActionResult BoardNotFoundError(Guid id) =>
-        new NotFoundObjectResult(new ProblemDetails
-        {
-            Type = "https://gameoflife.example/problems/board-not-found",
-            Title = "Board not found.",
-            Status = StatusCodes.Status404NotFound,
-            Detail = $"No board exists with id '{id}'."
-        });
+    private static NotFoundObjectResult BoardNotFoundError(Guid id) =>
+        new(Errors.BoardNotFound(id));
 }

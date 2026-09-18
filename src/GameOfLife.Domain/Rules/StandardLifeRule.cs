@@ -1,4 +1,4 @@
-namespace GameOfLife.Domain.Domain;
+namespace GameOfLife.Domain.Rules;
 
 /// <summary>
 ///     The standard Game of Life rule, B3/S23: a live cell survives on 2 or 3 neighbours; a dead cell is born on

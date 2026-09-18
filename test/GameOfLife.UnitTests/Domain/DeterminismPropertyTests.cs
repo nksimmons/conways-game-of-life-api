@@ -1,6 +1,7 @@
 using FsCheck;
 using FsCheck.Xunit;
 using GameOfLife.Domain.Domain;
+using GameOfLife.Domain.Rules;
 
 namespace GameOfLife.UnitTests.Domain;
 
@@ -14,7 +15,7 @@ public sealed class DeterminismPropertyTests
         var random = new Random(seed);
 
         var rows = Enumerable.Range(0, height)
-            .Select(_ => (IReadOnlyList<int>)Enumerable.Range(0, width).Select(_ => random.Next(2)).ToArray())
+            .Select(_ => (IReadOnlyList<int>)[.. Enumerable.Range(0, width).Select(_ => random.Next(2))])
             .ToArray();
 
         return Pattern.FromRows(rows);

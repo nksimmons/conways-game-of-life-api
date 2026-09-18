@@ -9,7 +9,7 @@ public sealed class EnumerableExtensionsTests
     {
         var fruits = new[] { "Apple", "Banana", "Cherry" };
 
-        Assert.Equal(new[] { ("Apple", 0), ("Banana", 1), ("Cherry", 2) }, fruits.WithIndex());
+        Assert.Equal([("Apple", 0), ("Banana", 1), ("Cherry", 2)], fruits.WithIndex());
     }
 
     [Fact]
@@ -22,7 +22,7 @@ public sealed class EnumerableExtensionsTests
         var indexed = values.WithIndex();
         values.Add(9);
 
-        Assert.Equal(new[] { (7, 0), (9, 1) }, indexed);
-        Assert.Equal(new[] { (7, 0), (9, 1) }, indexed);
+        Assert.Equal([(7, 0), (9, 1)], indexed);
+        Assert.Equal([(7, 0), (9, 1)], indexed);
     }
 }

@@ -1,5 +1,6 @@
 using GameOfLife.Domain.Domain;
 using GameOfLife.Domain.Observability;
+using GameOfLife.Domain.Rules;
 using Microsoft.EntityFrameworkCore;
 
 namespace GameOfLife.Infrastructure.Persistence;
@@ -14,7 +15,7 @@ public sealed class EfUniverseRepository(GameOfLifeDbContext dbContext) : IUnive
     {
         using var activity = GameOfLifeDiagnostics.ActivitySource.StartActivity("persistence.find-universe");
 
-        // AsNoTracking: a universe is never updated after AddAsync (docs/design.md §7.1), so there is
+        // AsNoTracking: a universe is never updated after AddAsync (README.md §7.1), so there is
         // nothing for the change tracker to track and no later SaveChanges that could need it. Skipping
         // it avoids the snapshot and identity-map bookkeeping EF would otherwise do for free.
         var record = await dbContext.Universes
@@ -51,6 +52,8 @@ public sealed class EfUniverseRepository(GameOfLifeDbContext dbContext) : IUnive
             CreatedAtUtc = universe.CreatedAtUtc
         };
 
+        // Synchronous Add: entity tracking is CPU-bound in memory. AddAsync exists only for
+        // special value generators (such as Hi-Lo sequences) and would incur unnecessary ValueTask overhead here.
         dbContext.Universes.Add(record);
         await dbContext.SaveChangesAsync(ct);
     }

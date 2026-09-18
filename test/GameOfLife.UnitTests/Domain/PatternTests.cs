@@ -1,4 +1,5 @@
 using GameOfLife.Domain.Domain;
+using GameOfLife.Domain.Rules;
 using GameOfLife.UnitTests.TestSupport;
 
 namespace GameOfLife.UnitTests.Domain;
@@ -39,6 +40,22 @@ public sealed class PatternTests
         };
 
         Assert.Throws<ArgumentException>(() => Pattern.FromRows(rows));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void FromRows_rejects_a_null_row_with_an_argument_error(int nullRow)
+    {
+        var rows = new IReadOnlyList<int>[3];
+        foreach (var row in Enumerable.Range(0, rows.Length))
+            if (row != nullRow)
+                rows[row] = new[] { 0, 1 };
+
+        var error = Assert.Throws<ArgumentException>(() => Pattern.FromRows(rows));
+
+        Assert.Equal("rows", error.ParamName);
     }
 
     [Fact]

@@ -1,10 +1,11 @@
 using GameOfLife.Domain.Domain;
+using GameOfLife.Domain.Rules;
 using GameOfLife.UnitTests.TestSupport;
 
 namespace GameOfLife.UnitTests.Domain;
 
 /// <summary>
-///     Tests built from the published pattern oracles (docs/design.md §6.4). Blinker and Glider in
+///     Tests built from the published pattern oracles (README.md §6.4). Blinker and Glider in
 ///     particular catch "NaiveLife" (updating cells in reading order instead of simultaneously), the
 ///     most common implementation bug in this problem.
 /// </summary>
@@ -199,7 +200,7 @@ public sealed class UniverseOracleTests
         // These are used as convergence-and-determinism tests, not exact-generation-count tests: the
         // published stabilisation generations (1103 for R-pentomino, 5206 for Acorn) assume an
         // unbounded grid, and both patterns emit escaping gliders that die at a bounded border
-        // instead of departing forever. See docs/design.md §6.4.
+        // instead of departing forever. See README.md §6.4.
         var seed = PatternTestHelper.EmbedInGrid(rows, 60, 60, 25, 25);
         var universe = CreateUniverse(seed);
 

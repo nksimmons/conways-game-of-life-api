@@ -29,6 +29,16 @@ public static class Errors
             Status = StatusCodes.Status400BadRequest
         };
 
+    /// <summary>Builds the RFC 7807 problem details when a board does not exist.</summary>
+    public static ProblemDetails BoardNotFound(Guid id) =>
+        new()
+        {
+            Type = "https://gameoflife.example/problems/board-not-found",
+            Title = "Board not found.",
+            Status = StatusCodes.Status404NotFound,
+            Detail = $"No board exists with id '{id}'."
+        };
+
     /// <summary>Converts model-binding failures, replacing the binder's internals-bearing text.</summary>
     public static ValidationProblemDetails ToProblemDetails(this ModelStateDictionary modelState)
     {

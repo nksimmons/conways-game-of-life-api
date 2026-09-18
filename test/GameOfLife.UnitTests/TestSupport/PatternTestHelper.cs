@@ -7,9 +7,10 @@ namespace GameOfLife.UnitTests.TestSupport;
 internal static class PatternTestHelper
 {
     public static Pattern FromAscii(params string[] rows) =>
-        Pattern.FromRows(rows
-            .Select(row => (IReadOnlyList<int>)[.. row.Select(ch => ch == 'O' ? 1 : 0)])
-            .ToList());
+        Pattern.FromRows([
+            .. rows
+                .Select(row => (IReadOnlyList<int>)[.. row.Select(ch => ch == 'O' ? 1 : 0)])
+        ]);
 
     /// <summary>
     ///     Embeds a small ASCII pattern into the top-left of a larger dead grid, so a spaceship or

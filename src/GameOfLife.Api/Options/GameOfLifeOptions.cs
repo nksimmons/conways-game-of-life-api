@@ -1,15 +1,19 @@
 using System.ComponentModel.DataAnnotations;
+using GameOfLife.Domain.Domain;
+using GameOfLife.Domain.Rules;
 
 namespace GameOfLife.Api.Options;
 
 /// <summary>
 ///     Denial-of-service controls, not cosmetic validation: these bound the worst-case cost of a single
 ///     request. Validated on start, so a nonsensical value fails at boot rather than on the first request.
-///     See docs/design.md §10.1 for the arithmetic behind the defaults.
+///     See README.md §10.1 for the arithmetic behind the defaults.
 /// </summary>
 public sealed class GameOfLifeOptions
 {
     public const string SectionName = "GameOfLife";
+
+    [Required] public string DefaultRule { get; init; } = RuleId.Standard.Value;
 
     [Range(1, int.MaxValue)] public int MaxWidth { get; init; } = 256;
 
@@ -31,7 +35,7 @@ public sealed class GameOfLifeOptions
     ///     the request pipeline itself: measured at 10 permits on 10 cores, `/health/live` took 5.9 s and
     ///     would have failed a load balancer probe. Reserving cores fixed it (23 ms at one reserved, 16 ms
     ///     at two). Two is the default so the cheap endpoints sharing this process keep some margin.
-    ///     See docs/design.md §8.4.
+    ///     See README.md §8.4.
     /// </summary>
     public int ResolvedMaxConcurrentEvaluations => MaxConcurrentEvaluations > 0
         ? MaxConcurrentEvaluations

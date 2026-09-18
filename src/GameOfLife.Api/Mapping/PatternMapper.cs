@@ -16,10 +16,12 @@ public static class PatternMapper
     {
         ArgumentNullException.ThrowIfNull(pattern);
 
-        return Enumerable.Range(0, pattern.Height)
-            .Select(row => Enumerable.Range(0, pattern.Width)
-                .Select(col => pattern.IsAlive(row, col) ? 1 : 0)
-                .ToArray())
-            .ToArray();
+        return
+        [
+            .. Enumerable.Range(0, pattern.Height)
+                .Select(row => Enumerable.Range(0, pattern.Width)
+                    .Select(col => pattern.IsAlive(row, col) ? 1 : 0)
+                    .ToArray())
+        ];
     }
 }

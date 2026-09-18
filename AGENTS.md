@@ -2,7 +2,7 @@
 
 Operating rules for AI agents working in this repository.
 
-**Project:** RESTful API implementing Conway's Game of Life. **Target framework:** `net8.0`. Do not upgrade it; the exercise pins .NET 8. **Design document:** [docs/design.md](docs/design.md). Read it before making architectural changes. If a change contradicts it, update the document in the same change or do not make the change.
+**Project:** RESTful API implementing Conway's Game of Life. **Target framework:** `net8.0`. Do not upgrade it; the exercise pins .NET 8. **Design document:** [README.md](README.md). Read it before making architectural changes. If a change contradicts it, update the document in the same change or do not make the change.
 
 ---
 
@@ -46,7 +46,7 @@ Architecture tests assert the dependency rule. If you add a project reference th
 
 Controllers stay thin. A controller binds and validates the request, calls a handler, and maps the `Result<T>` onto a status code. If a controller grows a third responsibility, the logic belongs in a handler.
 
-**There is no mediator library.** Dispatch is four interfaces in `Application`: `ICommand`, `IQuery<TResult>`, `ICommandHandler<TCommand>`, and `IQueryHandler<TQuery, TResult>`. Controllers inject the closed generics they need. Do not add MediatR or an equivalent to tidy up constructors; [docs/design.md §9.1](docs/design.md) records why, which alternatives were weighed, and what would justify reversing it.
+**There is no mediator library.** Dispatch is four interfaces in `Application`: `ICommand`, `IQuery<TResult>`, `ICommandHandler<TCommand>`, and `IQueryHandler<TQuery, TResult>`. Controllers inject the closed generics they need. Do not add MediatR or an equivalent to tidy up constructors; [README.md §9.1](README.md) records why, which alternatives were weighed, and what would justify reversing it.
 
 Do not build a reflective `Send`. In particular, never use `Activator.CreateInstance` to resolve a handler: it bypasses dependency injection, defers missing-registration failures from startup to request time, and discards the generic constraint tying a query to its result type. Register handlers explicitly and enable `ServiceProviderOptions.ValidateOnBuild` so a missing registration fails the process at boot rather than on first request.
 
@@ -80,16 +80,16 @@ Domain objects validate their own invariants in constructors via guard clauses. 
 
 ## 2. Domain rules specific to this project
 
-- **Use the Life literature's vocabulary, not the exercise's.** The aggregate is a `Universe`; its initial arrangement is the `Seed`; any arrangement of cells is a `Pattern`; the edge behaviour is `ITopology`; what a pattern eventually does is its `Fate`. "Board" is the exercise's word and appears only in HTTP routes, DTOs, and ProblemDetails. Do not introduce it into `Domain` or `Application`, and do not invent friendlier synonyms ("experiment", "launch pattern", "boundary") for terms the literature already has. [docs/design.md §1.3](docs/design.md) is the reference.
+- **Use the Life literature's vocabulary, not the exercise's.** The aggregate is a `Universe`; its initial arrangement is the `Seed`; any arrangement of cells is a `Pattern`; the edge behaviour is `ITopology`; what a pattern eventually does is its `Fate`. "Board" is the exercise's word and appears only in HTTP routes, DTOs, and ProblemDetails. Do not introduce it into `Domain` or `Application`, and do not invent friendlier synonyms ("experiment", "launch pattern", "boundary") for terms the literature already has. [README.md §1.3](README.md) is the reference.
 - **Spaceship, glider, still life, and oscillator are observations, not fields.** They classify behaviour discovered by generating. Never add an `IsSpaceship` or `PatternKind` property to the model. They belong in tests and in response metadata derived from `Fate`, nowhere else.
 - The **universe is an immutable seed.** Generations are computed, never stored. Do not add a "current generation" field or an `Advance()` method that mutates state. This single property underpins the caching, concurrency, and durability design, and breaking it invalidates all three.
 - Generation *N* must be a **pure function** of the seed, rule, topology, and *N*. No clock, no randomness, no ambient state.
 - Cell storage is **bit-packed** behind `Pattern`. Callers use `pattern.IsAlive(row, col)`. Never expose the backing array or make callers compute offsets. Projecting a pattern into a row-major 2D integer grid for transport JSON belongs in Api mapping via the `pattern.ToRows()` extension method, querying `IsAlive` to preserve encapsulation.
 - The evolution rule (`ILifeRule`) and topology (`ITopology`) are strategies. Do not hard-code B3/S23 or dead-edge logic into the aggregate.
 - **Update generations simultaneously.** Every cell must read its neighbours' *previous* state. Updating in reading order produces "NaiveLife", a subtly different automaton and the most common bug in this problem. The Blinker and Glider tests exist to catch it; keep them passing.
-- **There is no generation checkpointing, and `GET` handlers write nothing.** Checkpointing was designed and then cut, because bounding the input caps bounded worst-case cost directly ([docs/design.md §12](docs/design.md)). Do not reintroduce a snapshot table, a cache port, or a best-effort write on a read path.
+- **There is no generation checkpointing, and `GET` handlers write nothing.** Checkpointing was designed and then cut, because bounding the input caps bounded worst-case cost directly ([README.md §12](README.md)). Do not reintroduce a snapshot table, a cache port, or a best-effort write on a read path.
 
-  This is a decision taken on current numbers, not a permanent ban. ADR 010 records what would justify reversing it: measured repeated deep reads of the same universe, an `ETag` hit ratio too low to absorb them, or a rise in the caps. Note that [docs/design.md §10.1.1](docs/design.md) now reports measured timings that are roughly ten times the estimates the ADR was originally decided on, and flags the `final` replay-on-hit as work a checkpoint would genuinely remove. That is an argument for reopening the ADR with evidence, which is exactly what it asks for; it is not licence to add the mechanism back quietly.
+  This is a decision taken on current numbers, not a permanent ban. ADR 010 records what would justify reversing it: measured repeated deep reads of the same universe, an `ETag` hit ratio too low to absorb them, or a rise in the caps. Note that [README.md §10.1.1](README.md) now reports measured timings that are roughly ten times the estimates the ADR was originally decided on, and flags the `final` replay-on-hit as work a checkpoint would genuinely remove. That is an argument for reopening the ADR with evidence, which is exactly what it asks for; it is not licence to add the mechanism back quietly.
 
 ---
 
@@ -116,7 +116,7 @@ There is no shared mutable state on the request path by design. Keep it that way
 
 Never take a coarse-grained lock around a request path. Never `lock` around an `await` (it will not compile with `await` inside, and the pattern indicates a design problem).
 
-Bound concurrency explicitly, since unbounded parallelism is a defect. Admission is one mechanism, not two: a named ASP.NET Core rate-limiter concurrency policy sized from `Environment.ProcessorCount`, applied to the endpoints that run the evolution loop, returning `503` with `Retry-After` when saturated rather than queueing without limit. Do not reintroduce a hand-rolled `SemaphoreSlim` gate beside it; [docs/design.md §8.4](docs/design.md) records why the two were collapsed into one.
+Bound concurrency explicitly, since unbounded parallelism is a defect. Admission is one mechanism, not two: a named ASP.NET Core rate-limiter concurrency policy sized from `Environment.ProcessorCount`, applied to the endpoints that run the evolution loop, returning `503` with `Retry-After` when saturated rather than queueing without limit. Do not reintroduce a hand-rolled `SemaphoreSlim` gate beside it; [README.md §8.4](README.md) records why the two were collapsed into one.
 
 ### 3.3 Dependency injection
 
@@ -136,7 +136,7 @@ Bound concurrency explicitly, since unbounded parallelism is a defect. Admission
 
 ### 3.5 Validation and input safety
 
-Validate at the **system boundary** (Api), using the FluentValidation validator in `Api/Validation`, invoked explicitly by the controller. Do not reintroduce auto-validation via a filter or the deprecated `FluentValidation.AspNetCore` pipeline; [docs/design.md §10.5](docs/design.md) records why. Do not add defensive validation to internal methods for conditions that cannot occur. When invoking a validator, name the resulting `ValidationResult` variable `validationResult`, not `validation`.
+Validate at the **system boundary** (Api), using the FluentValidation validator in `Api/Validation`, invoked explicitly by the controller. Do not reintroduce auto-validation via a filter or the deprecated `FluentValidation.AspNetCore` pipeline; [README.md §10.5](README.md) records why. Do not add defensive validation to internal methods for conditions that cannot occur. When invoking a validator, name the resulting `ValidationResult` variable `validationResult`, not `validation`.
 
 Every `400`, whether it originates in model binding or in a validation rule, must be built by `Errors` so there is exactly one problem shape. Never echo a model-binder or serializer message into a response body: those name CLR types and byte offsets.
 
@@ -151,7 +151,7 @@ Every one of these must be enforced and tested:
 
 These caps are **denial-of-service controls**, not cosmetic validation, and they are the mechanism that bounds worst-case per-request cost. A request must never be able to demand unbounded CPU or memory.
 
-Raising any of them is a design change, not a configuration tweak: it invalidates the arithmetic in [docs/design.md §10.1](docs/design.md) and may reopen the case for checkpointing. Do not treat admission control as a substitute either, since that bounds how many requests run at once rather than the cost of any one of them.
+Raising any of them is a design change, not a configuration tweak: it invalidates the arithmetic in [README.md §10.1](README.md) and may reopen the case for checkpointing. Do not treat admission control as a substitute either, since that bounds how many requests run at once rather than the cost of any one of them.
 
 ### 3.6 General
 
@@ -215,10 +215,10 @@ This is a time-boxed exercise judged on **quality and thoughtful design, not com
 
 - Make only changes that are requested or clearly necessary.
 - Do not add features, layers, abstractions, or patterns beyond what is needed.
-- Do not introduce Redis, Kafka, GraphQL, event sourcing, a job queue, worker nodes, or microservices. These are recorded in [docs/design.md §12](docs/design.md) as deliberately deferred, with rationale, and §8.3 of that document states the specific trigger that would justify a queue and a worker tier. If one becomes necessary, update those sections rather than silently adding it.
+- Do not introduce Redis, Kafka, GraphQL, event sourcing, a job queue, worker nodes, or microservices. These are recorded in [README.md §12](README.md) as deliberately deferred, with rationale, and §8.3 of that document states the specific trigger that would justify a queue and a worker tier. If one becomes necessary, update those sections rather than silently adding it.
 - Do not create abstractions for a single implementation unless the design document names it as an intentional extensibility seam. There are exactly three: `ILifeRule`, `ITopology`, and `IUniverseRepository`. A fourth needs a stated variation axis and a concrete second case, not a hypothetical one.
-- There is exactly one bounded-context seam: between the exercise's HTTP contract ("board") and the Life domain. Do not split storage into its own "context"; the repository is a port within the Life context. A second context needs a term that means two different things on either side of it, and [docs/design.md §1.3](docs/design.md) names the one plausible candidate.
-- Keep the architectural decision separate from the library implementing it. EF Core and Serilog are implementations; the decisions they serve are tabulated in [docs/design.md §9](docs/design.md). Swapping one of them is a small change. Changing what it is there for is not.
+- There is exactly one bounded-context seam: between the exercise's HTTP contract ("board") and the Life domain. Do not split storage into its own "context"; the repository is a port within the Life context. A second context needs a term that means two different things on either side of it, and [README.md §1.3](README.md) names the one plausible candidate.
+- Keep the architectural decision separate from the library implementing it. EF Core and Serilog are implementations; the decisions they serve are tabulated in [README.md §9](README.md). Swapping one of them is a small change. Changing what it is there for is not.
 - Do not add documentation files unless asked.
 - Do not add comments that restate what the code does. Comment only to explain something the code cannot show, such as a non-obvious constraint or rationale. One line is usually enough.
 

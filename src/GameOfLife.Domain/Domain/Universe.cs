@@ -1,3 +1,5 @@
+using GameOfLife.Domain.Rules;
+
 namespace GameOfLife.Domain.Domain;
 
 /// <summary>

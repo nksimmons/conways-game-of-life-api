@@ -8,7 +8,7 @@ namespace GameOfLife.Api.Validation;
 /// <summary>
 ///     Boundary validation for the board upload. Domain guard clauses in <c>Pattern.FromRows</c> enforce
 ///     the same invariants independently; these exist to turn a bad request into a 400 rather than an
-///     exception, and the caps among them are denial-of-service controls (docs/design.md §10.1).
+///     exception, and the caps among them are denial-of-service controls (README.md §10.1).
 /// </summary>
 public sealed class UploadBoardRequestValidator : AbstractValidator<UploadBoardRequest>
 {

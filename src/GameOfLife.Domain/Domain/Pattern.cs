@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using GameOfLife.Domain.Common;
+using GameOfLife.Domain.Rules;
 
 namespace GameOfLife.Domain.Domain;
 
@@ -45,7 +46,7 @@ public sealed class Pattern : IEquatable<Pattern>
     {
         ArgumentNullException.ThrowIfNull(rows);
         if (rows.Count == 0) throw new ArgumentException("A pattern must have at least one row.", nameof(rows));
-        if (rows.Any(row => false)) throw new ArgumentException("Rows cannot be null.", nameof(rows));
+        if (rows.Any(row => row is null)) throw new ArgumentException("Rows cannot be null.", nameof(rows));
 
         var width = rows[0].Count;
         if (width == 0) throw new ArgumentException("A pattern must have at least one column.", nameof(rows));

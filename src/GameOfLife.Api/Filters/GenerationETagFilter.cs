@@ -1,4 +1,5 @@
 using GameOfLife.Api.Options;
+using GameOfLife.Api.Validation;
 using GameOfLife.Application;
 using GameOfLife.Application.GetUniverse;
 using GameOfLife.Domain.Common;
@@ -73,13 +74,7 @@ public sealed class GenerationETagFilter(
             var universeResult = await getUniverseHandler.HandleAsync(new GetUniverseQuery(new UniverseId(id)), ct);
             if (universeResult.Status == ResultStatus.NotFound)
             {
-                context.Result = new NotFoundObjectResult(new ProblemDetails
-                {
-                    Type = "https://gameoflife.example/problems/board-not-found",
-                    Title = "Board not found.",
-                    Status = StatusCodes.Status404NotFound,
-                    Detail = $"No board exists with id '{id}'."
-                });
+                context.Result = new NotFoundObjectResult(Errors.BoardNotFound(id));
                 return;
             }
 
