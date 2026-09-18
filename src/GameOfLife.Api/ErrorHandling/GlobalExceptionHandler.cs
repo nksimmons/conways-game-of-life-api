@@ -29,7 +29,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
                 badRequest.StatusCode == StatusCodes.Status413PayloadTooLarge
                     ? "The request body is too large."
                     : "The request could not be processed.",
-                ct).ConfigureAwait(false);
+                ct);
             return true;
         }
 
@@ -44,7 +44,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
             StatusCodes.Status500InternalServerError,
             "https://gameoflife.example/problems/internal-error",
             "An unexpected error occurred.",
-            ct).ConfigureAwait(false);
+            ct);
 
         return true;
     }

@@ -3,6 +3,8 @@ namespace GameOfLife.Domain.Domain;
 /// <summary>A finite universe with a dead edge: cells beyond the boundary are always dead. The default topology.</summary>
 public sealed class BoundedTopology : ITopology
 {
+    // Stateless strategy: a singleton avoids reallocating per neighbour count, and it is safe to
+    // share because CountLiveNeighbors never mutates instance state. See AGENTS.md §3.3.
     public static readonly BoundedTopology Instance = new();
 
     private BoundedTopology()

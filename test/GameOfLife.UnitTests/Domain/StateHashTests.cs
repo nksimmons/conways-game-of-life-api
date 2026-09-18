@@ -12,12 +12,12 @@ public sealed class StateHashTests
     }
 
     [Fact]
-    public void ToByteArray_round_trips()
+    public void ToString_renders_the_digest_as_lowercase_hex()
     {
         var digest = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
         var hash = StateHash.FromSha256Digest(digest);
 
-        Assert.Equal(digest, hash.ToByteArray());
+        Assert.Equal(Convert.ToHexString(digest).ToLowerInvariant(), hash.ToString());
     }
 
     [Fact]

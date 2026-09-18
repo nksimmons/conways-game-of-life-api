@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -44,6 +45,33 @@ public sealed class BoardsControllerTests : IClassFixture<GameOfLifeApiFactory>
         Assert.Equal(3, body.Height);
         Assert.Equal(3, body.Population);
         Assert.True(Guid.TryParse(body.BoardId, out _));
+    }
+
+    [Fact]
+    public async Task CreateBoard_swagger_request_example_is_a_15_by_15_glider()
+    {
+        var response = await _client.GetAsync("/swagger/v1/swagger.json");
+
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var cells = document.RootElement
+            .GetProperty("paths")
+            .GetProperty("/api/v1/boards")
+            .GetProperty("post")
+            .GetProperty("requestBody")
+            .GetProperty("content")
+            .GetProperty("application/json")
+            .GetProperty("example")
+            .GetProperty("cells");
+
+        Assert.Equal(15, cells.GetArrayLength());
+        Assert.All(cells.EnumerateArray(), row => Assert.Equal(15, row.GetArrayLength()));
+        Assert.Equal(5, cells.EnumerateArray().SelectMany(row => row.EnumerateArray()).Sum(cell => cell.GetInt32()));
+        Assert.Equal(1, cells[5][6].GetInt32());
+        Assert.Equal(1, cells[6][7].GetInt32());
+        Assert.Equal(1, cells[7][5].GetInt32());
+        Assert.Equal(1, cells[7][6].GetInt32());
+        Assert.Equal(1, cells[7][7].GetInt32());
     }
 
     [Theory]
@@ -136,6 +164,76 @@ public sealed class BoardsControllerTests : IClassFixture<GameOfLifeApiFactory>
         Assert.Equal(HttpStatusCode.NotModified, second.StatusCode);
     }
 
+    /// <summary>
+    /// The point of deriving the validator from identity rather than content: a conditional request
+    /// must be answerable without evolving anything. Asserted on the generations-computed counter
+    /// rather than on elapsed time, so it states the actual claim instead of a timing coincidence.
+    /// </summary>
+    [Fact]
+    public async Task Conditional_generation_request_does_not_run_the_evolution_loop()
+    {
+        var created = await CreateBoardAsync();
+        var url = $"/api/v1/boards/{created.BoardId}/generations/25";
+
+        var generationsComputed = 0L;
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, l) =>
+            {
+                if (instrument.Name == "gameoflife.generations_computed")
+                {
+                    l.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref generationsComputed, measurement));
+        listener.Start();
+
+        var unconditional = await _client.GetAsync(url);
+        var afterUnconditional = Interlocked.Read(ref generationsComputed);
+        var etag = unconditional.Headers.ETag!.ToString();
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.TryAddWithoutValidation("If-None-Match", etag);
+        var conditional = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.NotModified, conditional.StatusCode);
+        Assert.Equal(25, afterUnconditional);
+        Assert.Equal(afterUnconditional, Interlocked.Read(ref generationsComputed));
+    }
+
+    /// <summary>
+    /// A content-derived validator collided here: a blinker at generations 0 and 2 has identical
+    /// cells, but they are different representations with different `generation` and `_links` values.
+    /// </summary>
+    [Fact]
+    public async Task Generations_with_identical_cells_still_get_distinct_etags()
+    {
+        var created = await CreateBoardAsync();
+
+        var zero = await _client.GetAsync($"/api/v1/boards/{created.BoardId}/generations/0");
+        var two = await _client.GetAsync($"/api/v1/boards/{created.BoardId}/generations/2");
+
+        var cellsAtZero = (await zero.Content.ReadFromJsonAsync<GenerationResponse>(JsonOptions))!.Cells;
+        var cellsAtTwo = (await two.Content.ReadFromJsonAsync<GenerationResponse>(JsonOptions))!.Cells;
+
+        Assert.Equal(cellsAtZero, cellsAtTwo);
+        Assert.NotEqual(zero.Headers.ETag!.Tag, two.Headers.ETag!.Tag);
+    }
+
+    [Fact]
+    public async Task A_fabricated_validator_for_an_unknown_board_is_404_not_304()
+    {
+        var unknown = Guid.NewGuid();
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/boards/{unknown}/generations/1");
+        request.Headers.TryAddWithoutValidation("If-None-Match", $"\"v1-{unknown}-1\"");
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+    }
+
     [Fact]
     public async Task GetGeneration_rejects_an_out_of_range_index_with_400()
     {
@@ -167,8 +265,9 @@ public sealed class BoardsControllerTests : IClassFixture<GameOfLifeApiFactory>
 
         var body = await response.Content.ReadFromJsonAsync<FinalStateResponse>(JsonOptions);
         Assert.NotNull(body);
-        Assert.True(body!.Converged);
+        Assert.Equal(0, body!.StabilizedAtGeneration);
         Assert.Equal(2, body.Period);
+        Assert.Equal(3, body.Population);
     }
 
     [Fact]

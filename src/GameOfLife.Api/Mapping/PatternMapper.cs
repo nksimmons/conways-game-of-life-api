@@ -20,7 +20,4 @@ public static class PatternMapper
 
         return rows;
     }
-
-    /// <summary>A quoted ETag value. A generation's content can never change, so this is valid forever.</summary>
-    public static string ComputeETag(Pattern pattern) => $"\"sha256-{pattern.ComputeHash().ToHexString()}\"";
 }

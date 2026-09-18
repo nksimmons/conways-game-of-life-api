@@ -5,6 +5,9 @@ namespace GameOfLife.Domain.Domain;
 /// <summary>A 256-bit SHA-256 digest of a <see cref="Pattern"/>, used as a cheap dictionary key for cycle detection.</summary>
 public readonly struct StateHash : IEquatable<StateHash>
 {
+    // Four ulongs rather than a byte[32] because this is constructed once per generation inside the
+    // fate-search loop: an array would allocate per generation and, comparing by reference, would need
+    // a custom IEqualityComparer to work as a dictionary key at all.
     private readonly ulong _a;
     private readonly ulong _b;
     private readonly ulong _c;
@@ -32,7 +35,7 @@ public readonly struct StateHash : IEquatable<StateHash>
             BinaryPrimitives.ReadUInt64LittleEndian(digest[24..32]));
     }
 
-    public byte[] ToByteArray()
+    private byte[] ToByteArray()
     {
         var bytes = new byte[32];
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(0, 8), _a);
@@ -41,8 +44,6 @@ public readonly struct StateHash : IEquatable<StateHash>
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(24, 8), _d);
         return bytes;
     }
-
-    public string ToHexString() => Convert.ToHexString(ToByteArray()).ToLowerInvariant();
 
     public bool Equals(StateHash other) => _a == other._a && _b == other._b && _c == other._c && _d == other._d;
 
@@ -54,5 +55,5 @@ public readonly struct StateHash : IEquatable<StateHash>
 
     public static bool operator !=(StateHash left, StateHash right) => !left.Equals(right);
 
-    public override string ToString() => ToHexString();
+    public override string ToString() => Convert.ToHexString(ToByteArray()).ToLowerInvariant();
 }

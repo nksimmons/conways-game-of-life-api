@@ -9,63 +9,26 @@ public static class BoardRequestValidator
 
     public static IReadOnlyList<string> ValidateCells(int[][] cells, GameOfLifeOptions options)
     {
-        var errors = new List<string>();
-
         if (cells.Length == 0)
         {
-            errors.Add(MissingCellsError);
-            return errors;
+            return new[] { MissingCellsError };
         }
 
         var height = cells.Length;
-        var firstRow = cells[0];
-        var width = firstRow?.Length ?? 0;
-
+        var width = cells[0]?.Length ?? 0;
         if (width == 0)
         {
-            errors.Add("cells rows must be non-empty.");
-            return errors;
+            return new[] { "cells rows must be non-empty." };
         }
 
-        var rectangular = true;
-        foreach (var row in cells)
-        {
-            if (row is null || row.Length != width)
-            {
-                rectangular = false;
-                break;
-            }
-        }
+        var errors = new List<string>();
 
-        if (!rectangular)
+        if (Array.Exists(cells, row => row is null || row.Length != width))
         {
             errors.Add("cells must be rectangular; every row must have the same length.");
         }
 
-        var validValues = true;
-        foreach (var row in cells)
-        {
-            if (row is null)
-            {
-                continue;
-            }
-
-            foreach (var value in row)
-            {
-                if (value is not (0 or 1))
-                {
-                    validValues = false;
-                    break;
-                }
-            }
-
-            if (!validValues)
-            {
-                break;
-            }
-        }
-
-        if (!validValues)
+        if (Array.Exists(cells, row => row is not null && Array.Exists(row, value => value is not (0 or 1))))
         {
             errors.Add("cell values must be 0 or 1.");
         }
@@ -83,13 +46,8 @@ public static class BoardRequestValidator
         return errors;
     }
 
-    public static IReadOnlyList<string> ValidateGeneration(int n, GameOfLifeOptions options)
-    {
-        if (n < 0 || n > options.MaxGenerationsAhead)
-        {
-            return new[] { $"n must be between 0 and {options.MaxGenerationsAhead}." };
-        }
-
-        return Array.Empty<string>();
-    }
+    public static IReadOnlyList<string> ValidateGeneration(int n, GameOfLifeOptions options) =>
+        n < 0 || n > options.MaxGenerationsAhead
+            ? new[] { $"n must be between 0 and {options.MaxGenerationsAhead}." }
+            : Array.Empty<string>();
 }

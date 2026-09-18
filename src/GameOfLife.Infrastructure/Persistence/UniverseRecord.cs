@@ -19,7 +19,5 @@ internal sealed class UniverseRecord
 
     public byte[] SeedPacked { get; set; } = Array.Empty<byte>();
 
-    public byte[] SeedHash { get; set; } = Array.Empty<byte>();
-
     public DateTimeOffset CreatedAtUtc { get; set; }
 }

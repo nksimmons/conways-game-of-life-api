@@ -31,20 +31,16 @@ public sealed class GetFinalStateQueryHandler : IQueryHandler<GetFinalStateQuery
 
         var view = fate switch
         {
+            // IterationsExamined is AtGeneration + Period, not just AtGeneration: the search had to walk
+            // one full period past the cycle start to observe the repeat, so that sum is what it examined.
             Fate.Stabilized stabilized => new FinalStateView(
                 universe.Id,
-                Converged: true,
-                stabilized.AtGeneration,
-                stabilized.Period,
-                universe.GenerationAt(stabilized.AtGeneration, ct),
-                IterationsExamined: stabilized.AtGeneration + stabilized.Period),
-            Fate.Undetermined undetermined => new FinalStateView(
-                universe.Id,
-                Converged: false,
-                StabilizedAtGeneration: null,
-                Period: null,
-                Pattern: null,
-                undetermined.GenerationsExamined),
+                IterationsExamined: stabilized.AtGeneration + stabilized.Period,
+                new FinalStateView.Cycle(
+                    stabilized.AtGeneration,
+                    stabilized.Period,
+                    universe.GenerationAt(stabilized.AtGeneration, ct))),
+            Fate.Undetermined undetermined => new FinalStateView(universe.Id, undetermined.GenerationsExamined, Stabilized: null),
             _ => throw new InvalidOperationException($"Unknown fate type '{fate.GetType()}'."),
         };
 

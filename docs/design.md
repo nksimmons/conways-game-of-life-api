@@ -256,12 +256,30 @@ URL-segment versioning (`/api/v1/...`). Chosen over header or query-string versi
 
 ### 5.3 Representations
 
-Request, using the spec-literal 2D array:
+Request, using the spec-literal 2D array. This 15 by 15 seed places the standard five-cell glider
+away from the boundary. After every four generations it has the same shape one cell down and one
+cell right, which makes the API's immutable generation queries easy to see:
 
 ```json
-{ "cells": [[0,1,0],
-            [0,1,0],
-            [0,1,0]] }
+{
+  "cells": [
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,1,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
+    [0,0,0,0,0,1,1,1,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+  ]
+}
 ```
 
 Response:
@@ -298,11 +316,17 @@ The N+1 risk I noted while planning turns out not to apply here, because links a
 Because a generation's content is immutable, the caching story is stronger than it usually gets to be:
 
 ```
-ETag: "sha256-<state-hash>"
+ETag: "v1-<boardId>-<n>"
 Cache-Control: public, max-age=31536000, immutable
 ```
 
 `If-None-Match` is honoured and returns `304`. This follows directly from [§3](#3-the-governing-insight-determinism), and it is correct without any invalidation strategy, because nothing exists that could invalidate it.
+
+The validator is derived from identity rather than from content, and the first implementation got this wrong in a way worth recording. It used `"sha256-<state-hash>"`, a hash of the returned pattern. That is appealing, since the content is what a validator is supposed to identify, but it fails twice. It collides: a blinker at generations 0 and 2 has identical cells but is a different representation, carrying a different `generation` and different `_links`, so two distinct representations shared one strong validator. And it is useless for load, because the hash can only be computed *after* evolving the pattern, so a conditional request paid the full cost and then threw the body away. Measured at the cap, a `304` took 0.97 s against 0.98 s for the `200`: it saved 132 KB of bandwidth and no CPU at all. `python3 bench/probe.py cache` reports both, and now shows 0.003 s against 0.98 s.
+
+Deriving the validator from the board id and generation index fixes both. Both are immutable, the pair uniquely determines the bytes, and neither requires computing anything, so `If-None-Match` is answered before the evolution loop starts. The `v1` prefix is the representation version, so changing the response shape invalidates previously issued validators. The existence check still runs, so a fabricated validator for an unknown board gets a `404` rather than a spurious `304`.
+
+This is also the answer to whether a shared cache is needed once there is more than one node. The expensive work is now genuinely skippable on a conditional request, and because the validator is a pure function of immutable inputs, every node computes the same one without coordination. A shared HTTP cache in front of the load balancer absorbs the repeat reads, and it sits in front rather than behind, so it is unaffected by node count. That is a better fit for `public, immutable` responses than a distributed cache behind the balancer, which would still spend a request, a network hop, and a deserialisation to avoid work the validator already avoids. A distributed cache becomes interesting only for the case ADR 010 names, many *different* deep generations of the same universe spread across nodes, which is a measurement nobody has yet.
 
 The `final` resource is not marked immutable, since its result depends on the configured iteration budget, and that is a server-side setting which can change.
 
@@ -370,6 +394,8 @@ Content-Type: application/problem+json
 
 The alternative considered was `200` carrying an explicit `"converged": false`, on the argument that a client treating every 4xx as its own bug is poorly served here. I decided against it. Non-convergence means the server could not produce the requested representation, and encoding that as a success status pushes the failure into the body, where a generic client has no reason to look. `422` is specifically the status for a request that is syntactically valid and semantically understood but still unprocessable, which is exactly this case. Keeping the distinction in the status line also keeps it visible to proxies, dashboards, and alerting without anyone having to inspect a body.
 
+One consequence is worth following through, because the first implementation did not. If non-convergence never reaches a `200`, then the success body has no `"converged"` field to carry: it was always `true`, and the width, height, and cells beside it were declared nullable for a case that could not arrive. They are now non-nullable and the flag is gone. A field whose only possible value is `true` is a leftover from the rejected design, and leaving it in invites exactly the reading the status code was chosen to prevent.
+
 ### 6.4 Test oracles
 
 The published Life literature supplies exact, non-trivial expected values, which make good regression tests precisely because they fail loudly on any off-by-one in neighbour counting or any accidental in-place update.
@@ -412,7 +438,6 @@ erDiagram
         string   RuleId
         string   TopologyId
         blob     SeedPacked
-        blob     SeedHash
         datetime CreatedAtUtc
     }
 ```
@@ -465,6 +490,40 @@ public interface IUniverseRepository
 No `IQueryable`, no `Expression<Func<T,bool>>`, and no `SaveChanges` leaking across the boundary. The interface exposes only what the domain actually needs. The EF implementation lives in Infrastructure and is the only code that knows SQL exists. That satisfies dependency inversion without reintroducing the generic-repository smell.
 
 I'd add one thing to the usual argument against generic repositories. They are not just leaky; they are *uninformative*. `IRepository<Universe>` tells a reader that some storage exists. `IUniverseRepository` with two methods tells a reader that this application keeps exactly one kind of thing, finds it by identity, adds it once, and never updates or deletes it. The second interface is documentation of the domain's access pattern. The first is a template.
+
+### 7.5 The database this design could have avoided
+
+[§7.3](#73-store-choice) ends on an admission: the universe store is the only thing preventing the stateless scale-out story from being literally true. There is a way to remove it entirely, and since it would resolve that contradiction rather than restate it, it deserves measurement rather than dismissal.
+
+The seed is the only durable state, and a universe is never listed, searched, or enumerated. Every read is a point lookup by an identifier the server minted. So the identifier could simply *be* the seed: `base64url(header ‖ compressed seed ‖ HMAC)`, where the header carries width, height, rule, and topology. A `GET` decodes the token, verifies the signature, and reconstructs the universe. The server stores nothing at all.
+
+The obvious objection is length, and the obvious counter is that Life seeds are mostly empty. I measured both rather than guessing. The candidates were the bit-packed form, Deflate and Brotli over it, Golly's RLE, and a delta-encoded varint list of live-cell indices. Token lengths below assume a 6-byte header and a 16-byte truncated HMAC.
+
+| Seed | Packed | Best encoding | Token |
+|---|---:|---:|---:|
+| Glider, 15x15 | 29 B | 6 B | 38 chars |
+| Glider, 256x256 | 8,192 B | 10 B | 43 chars |
+| R-pentomino, 256x256 | 8,192 B | 10 B | 43 chars |
+| Gosper glider gun, 64x64 | 512 B | 38 B | 80 chars |
+| Every cell alive, 256x256 | 8,192 B | 13 B | 47 chars |
+| Random 5% fill, 256x256 | 8,192 B | 2,442 B | 3,286 chars |
+| Random 50% fill, 256x256 | 8,192 B | 8,192 B | 10,952 chars |
+
+The sparse results are better than I expected. A glider on a full-size board compresses from 8 KB to ten bytes, giving a 43-character token, which is shorter than the 36-character UUID plus route prefix it would replace. For hand-drawn patterns the seed genuinely does fit in its own name. Delta-varint wins on sparse boards and Brotli wins on dense but regular ones, so a real implementation would run both and tag the winner in the header.
+
+The dense results are where it fails, and it fails at a specific place. On a 256x256 board the break-even is about 2% fill, roughly 1,300 live cells: below that the token fits a conservative 2,000-character URL, and above it does not. Past about 25% fill the token exceeds Kestrel's default 8,192-byte request line, so the request is rejected before any application code runs. At 50% random fill, Deflate returned 8,197 bytes for an 8,192-byte input. That is not a tuning problem. Random data is incompressible, and the packed form is already at the entropy floor.
+
+What makes this more than a near miss is that the ceiling is provable rather than empirical. A 64x64 board packs to 512 bytes *whatever it contains*, which is a 712-character token even when compression achieves nothing. So for boards at or below 64x64 the scheme cannot fail. The guarantee actually holds to about 108x108; 64x64 is the round number below it, with headroom.
+
+That produces a tidy and slightly absurd observation. A tier of this API capped at 64x64 could be served with no database, no backups, and no replication, while boards above that cap need durable storage and everything that follows from it. The cheap tier is the free one and the expensive tier is the one that costs real money, which is the correct way round for freemium pricing and an unusually honest basis for a pricing page. I enjoyed this more than the idea deserves.
+
+It is not built, for four reasons, and only the first is fatal.
+
+A self-describing identifier has to be signed, or a client can mint universes the server never saw and `POST` becomes decorative. Signing means a key, and a key means rotation, and rotating it invalidates every token ever issued. The identifiers would stop resolving on a schedule. That is materially worse durability than the SQLite file it was meant to replace, and durability is the one explicitly stated requirement. Supporting overlapping keys defers the problem rather than removing it.
+
+The rest follow from that. Making the scheme universal would mean lowering the board cap from 256x256 to 64x64, which contradicts [§10.1](#101-validation-and-input-bounds); keeping both means two identifier formats and two storage paths behind one opaque id, which is a reasonable design and twice the surface to test. The identifier would also *be* the board contents, so it would appear in every log line, span attribute, metric label, and `Location` header, in direct conflict with the rule against logging board contents in [§10.3](#103-observability). And the failure mode is abrupt rather than gradual: the id is minted at `POST` and used by every subsequent `GET`, so a board landing over the threshold is not slow, it is permanently unreachable.
+
+One correction to an adjacent claim. [§12](#12-deliberately-not-built) records sparse coordinate sets as worse for the dense bounded grids this API accepts, and for the in-memory representation that evolution walks every generation, that stands. These measurements are about *serialisation* of a seed, where the same idea is the single best encoding for realistic patterns by a wide margin. The two conclusions are about different things, and I would rather say so than leave the table looking contradicted.
 
 ---
 
@@ -594,11 +653,47 @@ Computing N generations is O(N · w · h) and CPU-bound, which shapes the async 
 
 The evolution core is synchronous. Wrapping pure CPU work in `Task.Run` or returning a fake `Task` would move work onto a thread-pool thread without adding any concurrency, and under load that starves the pool rather than helping it. Database I/O is genuinely async, with `CancellationToken` threaded from `HttpContext.RequestAborted` so an abandoned request stops burning CPU promptly.
 
-Admission is bounded by a `SemaphoreSlim` sized from `Environment.ProcessorCount`, so a burst of expensive requests cannot occupy every core. Requests that fail to acquire a slot within a short timeout get `503` with `Retry-After`, which I prefer to unbounded queueing; a request that will be answered too late to be useful is better refused quickly. ASP.NET Core's built-in rate limiter provides the outer bound.
+Admission is bounded by a concurrency limiter applied as a named ASP.NET Core rate-limiter policy to the three endpoints that actually run the evolution loop. Requests that find no slot free get `503` with `Retry-After` immediately, which I prefer to unbounded queueing; a request that will be answered too late to be useful is better refused quickly. `CreateBoard` and `GetBoard` are outside the policy, because a single insert or a point lookup is not what saturates a core.
+
+The permit count is deliberately *below* the core count, and that detail turned out to matter more than anything else in this section. The reasoning is in "how many permits" below.
+
+An earlier draft ran two mechanisms side by side: a hand-rolled `SemaphoreSlim` gate behind an `IEvaluationAdmissionGate` port, acquired and released in a `try`/`finally` in each of the three endpoints, plus a global rate limiter as an outer bound. That was a mistake, and worth recording rather than quietly fixing. Two admission controls with two rejection paths need two explanations and can disagree, the port was a fourth abstraction with one implementation, and the hand-rolled version emitted no metrics, so the one thing an operator most wants to know (how often admission is rejecting) was invisible. The framework limiter publishes that on the `Microsoft.AspNetCore.RateLimiting` meter for free. Collapsing to one mechanism removed roughly sixty lines and left the behaviour identical, which is the test of whether an abstraction was earning its place.
 
 There is no lock anywhere, because there is no shared mutable state, which is a direct dividend of [§3](#3-the-governing-insight-determinism).
 
 One clarification, since an earlier draft blurred it. Admission control and the input caps in [§10.1](#101-validation-and-input-bounds) solve different problems. Caps bound the cost of a single request. Admission bounds how many expensive requests run concurrently. Neither substitutes for the other, and a design with only admission control still permits one request to monopolise a core for as long as its input allows.
+
+#### Why this is not superseded by a load balancer and autoscaling
+
+The natural objection: a fleet behind a load balancer with an autoscaling policy already handles "too much load," so why does a single process need its own admission control?
+
+Because autoscaling and per-process admission solve problems that live on different timescales, and neither substitutes for the other. Autoscaling reacts to an aggregated signal over a window: a metric scrape interval, a scale-out decision, then however long it takes a new instance or container to boot and pass its first health check. On real infrastructure that is on the order of one to five minutes, and often the high end of that range. Acquiring a permit from a concurrency limiter is microseconds. A burst of expensive requests does not wait for new capacity to arrive; whatever lands on the existing replicas in that window has to be survived by those replicas as they are, not as the fleet will eventually become.
+
+The load balancer also cannot see request cost. From [§10.1.1](#1011-what-evaluation-actually-costs), a `generations/0` request costs about 3 ms while `final` at the iteration budget was measured at about 12.9 s, a difference of more than three orders of magnitude, and both arrive as an identical-looking HTTP request. A round-robin or least-connections balancer has no way to weight by CPU cost, so nothing prevents it from routing a cluster of `final` requests onto the same node inside the same second, whatever the autoscaling policy says the fleet's average utilisation is.
+
+Without a per-node admission gate, that concentration saturates the node's cores directly, since the evolution core is deliberately synchronous ([§8.4](#84-concurrency-and-cpu-admission) above) rather than queued onto the thread pool. Every request the node is serving, not only the expensive ones, degrades together. If the saturation is severe enough to miss a health check deadline, the load balancer pulls the node from rotation, which kills the in-flight legitimate requests along with the overload, and does so precisely while the fleet has one fewer healthy node to absorb a burst that has not subsided. Clients or retry logic reacting to the resulting timeouts add more load at the worst possible moment, which is how a retry storm starts.
+
+With the gate, the node hits its own concurrency ceiling and returns an immediate `503` with `Retry-After` for the requests it cannot run right now, spending no CPU on them and never missing its health check. The node stays in rotation and keeps serving what it can, and the client gets a fast, correct signal to back off instead of a stalled connection.
+
+#### How many permits, and why not one per core
+
+The paragraph above is the argument for admission control. It is also, as first implemented, a claim this design failed to deliver, which is worth recording in full because the failure was invisible to every test in the suite and showed up only under load.
+
+The original permit count was `Environment.ProcessorCount`. That looks like the obvious choice: one evaluation per core, no oversubscription. It is wrong, and for a reason specific to this workload. The evolution loop is deliberately synchronous ([§8.4](#84-concurrency-and-cpu-admission) above), so a permit does not merely reserve a core, it *occupies a thread-pool thread and pins a core for the whole request*. At `ProcessorCount` permits, full saturation leaves the process with no CPU to run anything else, including the rate limiter's own rejection path, the liveness endpoint, and the socket accept loop. The thread pool responds by injecting threads at roughly one or two per second, which does not help, because the missing resource is the core, not the thread.
+
+Measured with `python3 bench/probe.py saturate` on a 10-core machine, 14 concurrent `final` requests at the cap, sampling `/health/live` every 250 ms:
+
+| Permits | Worst `/health/live` | Behaviour under saturation |
+|---|---|---|
+| 10, one per core | 5,898 ms | The process answered nothing at all for about six seconds |
+| 9, one core reserved | 23 ms | No stall |
+| 8, two cores reserved | 16 ms | No stall |
+
+A 5.9 second liveness response fails a typical load balancer probe, so the node is pulled from rotation. That is precisely the outcome this section claims admission control prevents, and the gate was causing it rather than preventing it. Cheap reads stayed fast in the same window, which is why nothing in the functional suite noticed: the damage was confined to the moment every permit was held.
+
+Reserving a single core was enough to fix it here. The default reserves two, because the reserve has to cover the cheap endpoints sharing this process under real traffic, not just the health probe in an otherwise idle test. The floor is one permit, so a two-core container still runs. The general lesson is that when the gated work is synchronous and CPU-bound, the permit count has to leave room for the server to remain a server; sizing admission to the core count silently spends the last core on work rather than on answering.
+
+So autoscaling answers how many nodes exist. Admission control answers what one node does under a burst it is already receiving, in the seconds before autoscaling could possibly help even if it is configured correctly. The two operate together; this is also why [§9](#9-decisions-versus-implementations) lists `Durability` (scaling past one replica) and `Admission` (bounded concurrency with explicit rejection) as separate rows rather than one.
 
 ---
 
@@ -613,7 +708,7 @@ A recurring failure mode in design documents is stating a library choice as thou
 | Durability | Write-once universe in a durable store | EF Core + SQLite | Scaling past one replica ([§7.3](#73-store-choice)), or a move to DynamoDB |
 | Evolution rule | Strategy, not hard-coded | `StandardLifeRule` (B3/S23) | Supporting HighLife or another Life-like rule |
 | Topology | Strategy, not hard-coded | `BoundedTopology` | A toroidal requirement |
-| Admission | Bounded concurrency with explicit rejection | `SemaphoreSlim` plus rate limiter | Queue-based backpressure |
+| Admission | Bounded concurrency with explicit rejection | A named ASP.NET Core rate-limiter concurrency policy | Queue-based backpressure |
 | Evaluation location | Behind a request abstraction | In-process and synchronous | `final` outgrowing request/response ([§8.3](#83-service-boundaries)) |
 | Telemetry | Vendor-neutral instrumentation | OpenTelemetry and Serilog | An exporter change, nothing more |
 
@@ -721,31 +816,55 @@ Validation happens at the system boundary, in Api, with the domain additionally 
 
 These caps are denial-of-service controls rather than cosmetic validation, and the numbers are chosen rather than inherited, so the arithmetic is worth showing.
 
-At the cap, one generation touches 256 × 256 = 65,536 cells. A generation-N request at n = 1000 therefore performs on the order of 6.6 × 10⁷ cell evaluations, and a full convergence walk at the 5000-iteration budget performs roughly 3.3 × 10⁸. Those are order-of-magnitude figures that want benchmarking rather than arithmetic, but they put a single request somewhere in the range of tens to a few hundred milliseconds, which is what makes synchronous evaluation defensible and what lets [§8.3](#83-service-boundaries) conclude that no queue is needed yet.
+At the cap, one generation touches 256 × 256 = 65,536 cells. A generation-N request at n = 1000 therefore performs on the order of 6.6 × 10⁷ cell evaluations, and a full convergence walk at the 5000-iteration budget performs roughly 3.3 × 10⁸. [§10.1.1](#1011-what-evaluation-actually-costs) turns those counts into measured times, and they are slower than an earlier draft of this document assumed: about a second for `generations/1000` and about ten for `final`. That is still a bounded worst case per request, which is the property the caps exist to provide, but it is not the "comfortably synchronous" picture the arithmetic alone suggested, and [§10.1.1](#1011-what-evaluation-actually-costs) follows through on what changes as a result.
 
 An earlier draft of this document set these at 512 × 512 with n up to 100,000, which permits roughly 2.6 × 10¹⁰ cell evaluations in a single request. That is minutes of CPU for one unauthenticated caller, and neither caching nor checkpointing fixes it, because a cold board pays full price on the first request regardless. Lowering the caps is what actually closed that hole. It is also what made checkpointing unnecessary, which I think is a decent illustration of how often a performance mechanism turns out to be compensating for an input bound nobody set.
 
 ### 10.1.1 What evaluation actually costs
 
-The cell counts above only become meaningful once they are turned into time, and the answer decides whether synchronous evaluation is defensible. These are estimates and want a benchmark before anyone treats them as tuned, but the orders of magnitude are what matter.
+The cell counts above only become meaningful once they are turned into time, and the answer decides whether synchronous evaluation is defensible. An earlier draft of this section answered that by arithmetic, and the arithmetic was wrong by more than an order of magnitude. The numbers below are measured instead: Release build on `net8.0`, Apple Silicon, one request at a time, against a random 256 by 256 seed, which is the cap. They are single-machine timings rather than a proper benchmark harness, so treat them as the right order of magnitude rather than as tuned figures. Every one of them is reproducible with `python3 bench/probe.py load`, and the seeds are fixed, so the generation counts are exact even though the times will vary by machine.
 
-A generation is one pass over the grid: for each cell, count live neighbours and apply the rule. The work is linear in area, perfectly sequential, cache-friendly, and branch-light. It is about as well-behaved as CPU-bound work gets.
+| Request | Measured | Earlier estimate |
+|---|---|---|
+| `generations/0` | ~2 ms | not stated |
+| `generations/1000` | ~0.97 s | ~20 ms |
+| `final`, which converged at generation 4,626 with period 2 | ~12.9 s | ~100 ms |
 
-| Work | At the caps | Naive per-cell | Bit-packed |
+A generation is one pass over the grid: for each cell, count live neighbours and apply the rule. The `generations/0` row is the fixed cost of a point lookup plus serialising 65,536 cells, and at 3 ms it is small enough to ignore. Subtracting it, evolution runs at almost exactly 1 ms per generation at the cap, or around 15 ns per cell. The work is linear in area, perfectly sequential, cache-friendly, and branch-light, which is about as well-behaved as CPU-bound work gets. It is simply not as fast as the estimate assumed.
+
+Two corrections matter more than the numbers.
+
+The first is that the estimate priced a bit-parallel evolution step that was never written. `Pattern` does store cells bit-packed in a `ulong[]`, but `NextGeneration` visits one cell at a time through `ITopology.CountLiveNeighbors`. The packing buys memory density and cheap whole-state equality and hashing, which is exactly what cycle detection needs; it does not buy word-parallel neighbour counting. Counting 64 cells at once with full-adder arithmetic is a real technique and would plausibly close most of the gap, but it is not what this code does, and a design document should not claim an optimisation on the strength of the data structure that would merely permit it.
+
+The second is that `final` costs substantially more than its generation count suggests, because of the verification step in [§6.2](#62-why-a-hash-map-and-why-verify-on-hit). Detecting the repeat took 4,628 evolution steps, and confirming the candidate then replayed 4,626 more from the seed. That replay is roughly half of the 12.9 s. Its cost is proportional to where the cycle starts, so it is worst precisely for the long-lived seeds that make `final` worth asking about. It also puts a ceiling on the endpoint: a cycle detected just under the 5,000 budget would cost close to 10,000 evolution steps, so about 14 s is the worst this endpoint can currently do.
+
+The conclusion the earlier draft drew does not survive its own numbers, so it is withdrawn rather than quietly amended. A `final` request at the cap is measured at about thirteen seconds of CPU, not a hundred milliseconds. Three things follow. Admission control is load-bearing rather than precautionary, since a handful of concurrent `final` requests can occupy every core for a noticeable interval; that is the mechanism in [§8.4](#84-concurrency-and-cpu-admission). The trigger in [§8.3](#83-service-boundaries) for moving `final` to a queued, asynchronous job is closer than this document previously implied, and on these numbers it is the single change I would make next. And ADR 010 deserves reopening on evidence that already exists: the replay-on-hit is repeated work against an immutable seed, which is the shape of problem a checkpoint actually solves, as distinct from the repeat-read caching case that ADR 010 declined.
+
+What has not changed is the caps themselves. They still bound a single request, and the measured worst case is bounded; thirteen seconds is unpleasant, not unbounded. Whether the `final` budget of 5,000 is the right ceiling given these timings is [§15](#15-open-questions-for-discussion)'s question rather than something to change silently here, since lowering it trades convergence coverage for latency and that trade deserves a decision rather than an edit.
+
+#### Which input is actually the worst one
+
+The intuitive adversarial payload is a 256 by 256 grid with every cell set to 1. It is nearly the cheapest thing you can send. Measured at the cap:
+
+| Seed, 256 by 256 | `generations/1000` | `final` | Outcome |
 |---|---|---|---|
-| One generation | 65,536 cells | ~0.1 ms | ~0.02 ms |
-| `generations/1000` | 6.6 × 10⁷ cells | ~100 ms | ~20 ms |
-| `final` at budget 5000 | 3.3 × 10⁸ cells | ~500 ms | ~100 ms |
+| Every cell alive | 0.88 s | 0.01 s | Stabilises at generation 2 |
+| Every cell dead | 0.88 s | 0.00 s | Stabilises at generation 0 |
+| Checkerboard | 0.95 s | 2.69 s | Stabilises at generation 946 |
+| Random, 30% alive | 0.97 s | 3.84 s | Stabilises at generation 1,336 |
+| Random, 50% alive | 0.98 s | 12.90 s | Stabilises at generation 4,626 |
 
-The bit-packed column is why [§4.2](#42-pattern-rather-than-raw-indexing) stores cells in a `ulong[]`. Because neighbour counting can be done with bitwise full-adder arithmetic on 64 cells at a time, a whole 256-wide row is four words rather than 256 separate cell visits. Cycle detection adds a hash of each generation, which at 8 KB per state is a microsecond or two and stays small relative to the evolution step.
+A full grid dies almost immediately: every interior cell has eight live neighbours and dies of overcrowding, every edge cell has five, and only the four corners have three and survive, so generation 1 is four isolated cells and generation 2 is empty. Maximum density is minimum lifespan. The expensive seeds are the middling-density random ones, which stay chaotic for thousands of generations before settling.
 
-Two things follow. First, a generation-N request is cheap enough that there is nothing to optimise; the interesting case is `final`, which is the only endpoint that can approach a second of CPU, and that asymmetry is exactly why [§8.3](#83-service-boundaries) says `final` is the piece that would split off first. Second, and more to the point for caching: at roughly a tenth of a millisecond per generation, a cache would be saving tens of milliseconds while adding a storage dependency, an eviction policy, and a write on a read path. That trade only changes if the numbers change, which is what [§12](#12-deliberately-not-built) and ADR 010 record as the triggers.
+Two things follow. `generations/n` costs the same whatever the content, because the loop visits every cell regardless of whether it is alive, so its worst case is simply the largest grid at the largest `n`. `final` is the opposite: its cost is entirely content-dependent and unpredictable from the payload, which is a decent argument on its own for why it is the endpoint that gets a budget and the one [§8.3](#83-service-boundaries) would move off the request path first. It also means an attacker cannot find the worst input by inspection; they would have to search for it, and the budget caps what they would find.
 
 ### 10.2 Error handling
 
 RFC 7807 `application/problem+json` throughout, via a single exception-handling middleware. No stack traces and no internal detail cross the boundary.
 
-Expected failures, meaning not found, invalid input, and non-convergence, are modelled as `Result<T>` values rather than exceptions, and mapped to status codes at the edge. Exceptions stay reserved for genuinely exceptional conditions. This is the practical substitute for discriminated unions, which `net8.0` lacks.
+Expected failures are modelled as `Result<T>` values rather than exceptions, and mapped to status codes at the edge. Exceptions stay reserved for genuinely exceptional conditions. This is the practical substitute for discriminated unions, which `net8.0` lacks.
+
+`Result<T>` carries exactly two cases, success and not-found, which is narrower than an earlier draft that also had an `Invalid` case with an error list. Nothing ever constructed it: invalid input is rejected at the web boundary before a handler runs, and non-convergence is a successful answer carrying a `Fate`, not a failed one. A case no code path can produce is not extensibility, it is an unanswerable question in a code review, so it is gone. The non-generic `Result` went with it, since the one command cannot fail in an expected way and returning `Task` says so honestly.
 
 ### 10.3 Observability
 
@@ -753,7 +872,7 @@ First-class rather than deferred to the end:
 
 - **Structured logging.** Serilog, JSON to stdout, correlation id on every request. No board contents in logs, since payloads are large and add noise without adding diagnostic value.
 - **Tracing.** OpenTelemetry, with spans around evolution and database access, so a slow request can be attributed to a phase rather than guessed at.
-- **Metrics.** Generations computed, evolution duration histogram, convergence outcome by result type, admission rejections, and `ETag` hit ratio. That last one exists specifically to make the ADR 010 trigger observable: if HTTP caching stops absorbing repeat reads, the case for checkpointing should be reopened on evidence rather than on instinct.
+- **Metrics.** Generations computed, evolution duration histogram, and convergence outcome tagged by whether a cycle was found, on a `Meter` owned by the domain. Admission rejections come from the framework's own `Microsoft.AspNetCore.RateLimiting` meter, which is one of the things the consolidation in [§8.4](#84-concurrency-and-cpu-admission) bought. The `ETag` hit ratio that ADR 010 leans on needs no custom instrumentation either: it is `304` against `200` on the generations route, and the standard ASP.NET Core HTTP metrics already carry status code as a dimension. Deriving it from a query rather than a counter is the difference between an ADR trigger that is observable and one that is only claimed to be. The generations-computed counter also serves as the assertion in the functional test that a conditional request skips the evolution loop, which is a stronger claim than timing it.
 - **Health.** `/health/live` for the process and `/health/ready` for the database, kept separate so an orchestrator restarts only on genuine liveness failure rather than on a dependency blip.
 
 ### 10.4 Configuration
@@ -773,7 +892,15 @@ Options bound with `IOptions<T>` and validated on startup, so a bad configuratio
 }
 ```
 
-`MaxConcurrentEvaluations: 0` means "use `Environment.ProcessorCount`."
+`MaxConcurrentEvaluations: 0` means "derive it from `Environment.ProcessorCount`", which resolves to two fewer than the core count, with a floor of one. [§8.4](#84-concurrency-and-cpu-admission) has the measurements behind the reserve.
+
+### 10.5 Validation probed rather than assumed
+
+The boundary rules in [§10.1](#101-validation-and-input-bounds) are enumerated as a table, which makes them look complete. Whether they *are* complete is a different question, so they were probed against a running server rather than reasoned about: 34 hostile or malformed payloads covering missing and null `cells`, ragged rows, null rows in leading and trailing position, out-of-range and non-integer cell values, `int64` overflow in a cell, a one-dimensional `cells`, a `cells` that is a string, truncated JSON, a 200-deep nesting bomb, a wrong and a missing `Content-Type`, a 1.4 MB body, both dimensions one over the cap, both exactly at the cap, and the generation index at `-1`, at the cap, one past it, at `int` overflow, and non-numeric.
+
+All 34 returned the intended status, and every error carried `application/problem+json`. Three of those are worth naming because they are handled by the framework rather than by any code in this repository, which is the sort of thing that is easy to claim and easy to get wrong: the oversized body is refused with `413` before model binding by the `RequestSizeLimit` on the action, the nesting bomb is refused with `400` by `System.Text.Json`'s default 64-level depth limit, and a missing or wrong `Content-Type` is `415` from content negotiation.
+
+The probes live in `bench/probe.py` rather than in the functional suite, because they assert against a process under real load and the timing subcommands take minutes. `python3 bench/probe.py validate` exits non-zero on any mismatch, so it can gate a pipeline; the behaviours worth protecting from regression on every commit are already duplicated as fast functional tests.
 
 ---
 
@@ -801,6 +928,7 @@ The exercise says it values thoughtful design over an overly complex implementat
 |---|---|
 | **Generation checkpointing** | Saving generation 448 to storage so a later request for 500 could resume from it instead of replaying from the seed. Cut for three reasons. It speeds up repeat requests but does nothing for the first one, and the first one is what sets the worst case; lowering the caps ([§10.1](#101-validation-and-input-bounds)) fixed the worst case directly. It made a `GET` write to the database. And saving in the background risked outliving the request, whose database connection is disposed once the response is sent. ADR 010 records what would bring it back |
 | **Queue and worker tier** | [§8.3](#83-service-boundaries) covers this in full. The work is a pure function with no side effects, so there is nothing to decouple from. `final` is the piece that would split first, and only once its budget outgrows an HTTP request |
+| **Seed-carrying identifiers, and the free tier they imply** | [§7.5](#75-the-database-this-design-could-have-avoided) covers this in full, with measurements. A compressed signed token would remove the database outright, and for sparse seeds it is genuinely shorter than the UUID it replaces. It dies on key rotation, which would expire every identifier ever issued |
 | Authentication and authorization | Explicitly out of scope per the prompt |
 | Redis or a distributed cache | Single deployable, and HTTP caching already covers the repeat-read case Redis would serve |
 | Kafka or event streaming | No second consumer exists. Adding one would be architecture theatre |
@@ -866,17 +994,18 @@ One note in case checkpointing ever returns. DynamoDB handles it well: a sort ke
 | 004 | Pattern storage | Bit-packed `ulong[]` behind `Pattern` |
 | 005 | Topology | Bounded dead-edge default, behind `ITopology` |
 | 006 | Cycle detection | Hash to generation index, with full-state collision verification |
-| 007 | Non-convergence | `422` plus ProblemDetails reporting iterations examined. `200` with `"converged": false` considered and rejected |
+| 007 | Non-convergence | `422` plus ProblemDetails reporting iterations examined. `200` with `"converged": false` considered and rejected, and the success body carries no `converged` flag as a result ([§6.3](#63-the-non-convergence-contract)) |
 | 008 | Persistence | EF Core and SQLite file. Postgres becomes the default at the same trigger as scaling past one replica |
 | 009 | Repository shape | Narrow domain port; no generic repository over EF |
-| 010 | Checkpointing | Designed, then cut; bounding the input fixed the worst case instead. **Reconsider on evidence, not instinct:** measured traffic showing repeated deep reads of the same universe, an `ETag` hit rate low enough that HTTP caching is not absorbing them, or a rise in the caps ([§10.1.1](#1011-what-evaluation-actually-costs)) |
-| 011 | Error modelling | `Result<T>` for expected failures, exceptions for exceptional ones |
-| 012 | Async posture | Synchronous CPU core, async I/O, `SemaphoreSlim` admission gate |
-| 013 | Caching | `ETag` and `immutable`, valid by construction |
+| 010 | Checkpointing | Designed, then cut; bounding the input fixed the worst case instead. **Reconsider on evidence, not instinct:** measured traffic showing repeated deep reads of the same universe, an `ETag` hit rate low enough that HTTP caching is not absorbing them, or a rise in the caps. The measurement in [§10.1.1](#1011-what-evaluation-actually-costs) is itself partial evidence, since the `final` replay-on-hit is repeated work against an immutable seed |
+| 011 | Error modelling | `Result<T>` for expected failures, exceptions for exceptional ones. Narrowed to success and not-found once it was clear nothing could construct the `Invalid` case ([§10.2](#102-error-handling)) |
+| 012 | Async posture | Synchronous CPU core, async I/O, a named rate-limiter concurrency policy for admission. A hand-rolled `SemaphoreSlim` gate did this first and was removed as duplication ([§8.4](#84-concurrency-and-cpu-admission)) |
+| 013 | Caching | `ETag` and `immutable`, valid by construction. The validator is derived from board id and generation, not from a content hash, so a conditional request skips the evolution loop instead of paying for it ([§5.5](#55-caching)) |
 | 014 | Versioning | URL segment from day one |
 | 015 | Service boundaries | One deployable. `final` splits first, and only on a stated trigger |
 | 016 | Use-case dispatch | Hand-rolled command and query handler interfaces, injected as closed generics. No mediator library; Wolverine named as successor at the `final` split |
 | 017 | Ubiquitous language | Domain uses the Life literature's vocabulary (universe, seed, pattern, generation, rule, topology, fate). "Board" is the exercise's word, translated at the web boundary. Exactly one bounded-context seam today; a pattern catalogue named as the plausible second ([§1.3](#13-modelling-the-domain)) |
+| 018 | Identifier shape | Opaque server-minted UUID, with the seed in SQLite. A signed self-describing token was measured, not assumed: it is smaller than a UUID for sparse seeds and provably bounded at or below 64x64, but signing-key rotation would invalidate every identifier ever issued ([§7.5](#75-the-database-this-design-could-have-avoided)). **Reconsider if** a signing key can be held for the service's lifetime, or the board cap drops to 64x64 |
 
 ---
 
@@ -885,5 +1014,5 @@ One note in case checkpointing ever returns. DynamoDB handles it well: a sort ke
 1. **Topology default.** Bounded converges more often and matches the literal prompt; toroidal is arguably the more faithful approximation of the infinite grid Conway described. I went with bounded, but I hold it loosely.
 2. **Client-supplied budget.** Should `final` accept a `maxIterations` clamped to the server ceiling, or stay purely server-configured? Accepting one makes the response depend on a request parameter, which affects the caching story.
 3. **The `/next` alias.** Worth the redundancy for the reviewer, or does the uniform `generations/{n}` model stand better alone?
-4. **Cap calibration.** The numbers in [§10.1](#101-validation-and-input-bounds) come from arithmetic, not measurement. They should be benchmarked before anyone treats them as tuned, and I'd expect to move them once they are.
+4. **Cap calibration.** The numbers in [§10.1](#101-validation-and-input-bounds) came from arithmetic and have since been measured ([§10.1.1](#1011-what-evaluation-actually-costs)). The measurement raises a question the arithmetic hid: at the cap, `final` is about thirteen seconds of CPU for one request. Is a 5,000-generation budget the right ceiling, given that lowering it trades convergence coverage for worst-case latency, or is the better answer to keep the budget and move `final` off the request path entirely ([§13.1](#131-when-the-synchronous-final-stops-being-enough))? I lean towards the latter, since lowering the budget makes the endpoint answer "I don't know" more often, which is the least useful thing it can do.
 5. **Dispatch without a library.** [§9.1](#91-use-case-dispatch-no-library) hand-rolls four interfaces rather than taking a mediator dependency, on the grounds that the pipeline is the main thing a mediator adds and this design has no behaviours. The cost is that there is no pipeline seam, so the first genuinely cross-cutting concern forces the question. Is that the right moment to adopt a library, and is the familiarity of `Send` worth something on its own to a reader?

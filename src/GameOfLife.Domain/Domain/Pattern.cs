@@ -186,8 +186,13 @@ public sealed class Pattern : IEquatable<Pattern>
 
     public override bool Equals(object? obj) => Equals(obj as Pattern);
 
-    public override int GetHashCode() => ComputeHash().GetHashCode();
+    // Deliberately not ComputeHash(): that is a SHA-256 over the whole grid, far too expensive for a
+    // hash code. Width, height, and population are cheap and consistent with Equals.
+    public override int GetHashCode() => HashCode.Combine(Width, Height, Population);
 
+    // Cast to long before multiplying: at today's 256x256 / 65,536-cell caps this never overflows
+    // int, but AGENTS.md §3.5 says raising the caps is a design change, not a config tweak, and this
+    // keeps that future change from silently wrapping into a negative word count.
     private static int WordCount(int width, int height) => (int)(((long)width * height + 63) / 64);
 
     private static void SetBit(ulong[] bits, int index) => bits[index >> 6] |= 1UL << (index & 63);

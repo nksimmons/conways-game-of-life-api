@@ -3,6 +3,7 @@ namespace GameOfLife.Domain.Domain;
 /// <summary>The standard Game of Life rule, B3/S23: a live cell survives on 2 or 3 neighbours; a dead cell is born on exactly 3.</summary>
 public sealed class StandardLifeRule : ILifeRule
 {
+    // See BoundedTopology.Instance for why this is a singleton.
     public static readonly StandardLifeRule Instance = new();
 
     private StandardLifeRule()

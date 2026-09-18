@@ -5,12 +5,12 @@ using GameOfLife.Application.CreateUniverse;
 using GameOfLife.Application.GetFinalState;
 using GameOfLife.Application.GetGeneration;
 using GameOfLife.Application.GetUniverse;
-using GameOfLife.Api.Concurrency;
 using GameOfLife.Api.Contracts;
 using GameOfLife.Api.Mapping;
 using GameOfLife.Api.Options;
 using GameOfLife.Api.Validation;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Options;
 
@@ -24,20 +24,21 @@ namespace GameOfLife.Api.Controllers;
 [Route("api/v1/boards")]
 public sealed class BoardsController : ControllerBase
 {
+    /// <summary>Applied to the three endpoints that run the evolution loop; configured in Program.cs.</summary>
+    public const string EvaluationPolicy = "evaluation";
+
     private readonly ICommandHandler<CreateUniverseCommand> _createHandler;
     private readonly IQueryHandler<GetUniverseQuery, UniverseView> _getUniverseHandler;
     private readonly IQueryHandler<GetGenerationQuery, PatternView> _getGenerationHandler;
     private readonly IQueryHandler<GetFinalStateQuery, FinalStateView> _getFinalStateHandler;
-    private readonly IEvaluationAdmissionGate _admissionGate;
     private readonly LinkGenerator _linkGenerator;
-    private readonly IOptions<GameOfLifeOptions> _options;
+    private readonly GameOfLifeOptions _options;
 
     public BoardsController(
         ICommandHandler<CreateUniverseCommand> createHandler,
         IQueryHandler<GetUniverseQuery, UniverseView> getUniverseHandler,
         IQueryHandler<GetGenerationQuery, PatternView> getGenerationHandler,
         IQueryHandler<GetFinalStateQuery, FinalStateView> getFinalStateHandler,
-        IEvaluationAdmissionGate admissionGate,
         LinkGenerator linkGenerator,
         IOptions<GameOfLifeOptions> options)
     {
@@ -45,12 +46,13 @@ public sealed class BoardsController : ControllerBase
         _getUniverseHandler = getUniverseHandler;
         _getGenerationHandler = getGenerationHandler;
         _getFinalStateHandler = getFinalStateHandler;
-        _admissionGate = admissionGate;
         _linkGenerator = linkGenerator;
-        _options = options;
+        _options = options.Value;
     }
 
     [HttpPost]
+    // A cheap pre-parse guard only: a pretty-printed 256x256 board is roughly 580 KB of JSON, so 1 MB
+    // leaves headroom. The authoritative cap is the cell count, which can only be checked after parsing.
     [RequestSizeLimit(1_048_576)]
     public async Task<IActionResult> CreateBoard([FromBody] UploadBoardRequest? request, CancellationToken ct)
     {
@@ -59,17 +61,16 @@ public sealed class BoardsController : ControllerBase
             return InvalidRequestProblem(new[] { BoardRequestValidator.MissingCellsError });
         }
 
-        var errors = BoardRequestValidator.ValidateCells(cells, _options.Value);
+        var errors = BoardRequestValidator.ValidateCells(cells, _options);
         if (errors.Count > 0)
         {
             return InvalidRequestProblem(errors);
         }
 
-        var rows = cells.Select(row => (IReadOnlyList<int>)row).ToList();
-        var seed = Pattern.FromRows(rows);
+        var seed = Pattern.FromRows(cells);
         var id = UniverseId.NewId();
 
-        await _createHandler.HandleAsync(new CreateUniverseCommand(id, seed), ct).ConfigureAwait(false);
+        await _createHandler.HandleAsync(new CreateUniverseCommand(id, seed), ct);
 
         var response = new BoardCreatedResponse(id.ToString(), seed.Width, seed.Height, seed.Population, BuildBoardLinks(id.Value));
         return CreatedAtRoute("GetBoard", new { id = id.Value }, response);
@@ -78,7 +79,7 @@ public sealed class BoardsController : ControllerBase
     [HttpGet("{id:guid}", Name = "GetBoard")]
     public async Task<IActionResult> GetBoard(Guid id, CancellationToken ct)
     {
-        var result = await _getUniverseHandler.HandleAsync(new GetUniverseQuery(new UniverseId(id)), ct).ConfigureAwait(false);
+        var result = await _getUniverseHandler.HandleAsync(new GetUniverseQuery(new UniverseId(id)), ct);
         if (result.Status == ResultStatus.NotFound)
         {
             return BoardNotFoundProblem(id);
@@ -99,119 +100,87 @@ public sealed class BoardsController : ControllerBase
     }
 
     [HttpGet("{id:guid}/generations/{n:int}", Name = "GetGeneration")]
+    [EnableRateLimiting(EvaluationPolicy)]
     public async Task<IActionResult> GetGeneration(Guid id, int n, CancellationToken ct)
     {
-        var validationErrors = BoardRequestValidator.ValidateGeneration(n, _options.Value);
-        if (validationErrors.Count > 0)
-        {
-            return InvalidRequestProblem(validationErrors);
-        }
-
-        var lease = await _admissionGate.TryAcquireAsync(TimeSpan.Zero, ct).ConfigureAwait(false);
-        if (lease is null)
-        {
-            return AdmissionRejectedProblem();
-        }
-
-        try
-        {
-            var result = await _getGenerationHandler.HandleAsync(new GetGenerationQuery(new UniverseId(id), n), ct).ConfigureAwait(false);
-            if (result.Status == ResultStatus.NotFound)
-            {
-                return BoardNotFoundProblem(id);
-            }
-
-            return GenerationResult(result.Value, id);
-        }
-        finally
-        {
-            lease.Dispose();
-        }
+        var errors = BoardRequestValidator.ValidateGeneration(n, _options);
+        return errors.Count > 0
+            ? InvalidRequestProblem(errors)
+            : await GenerationAsync(id, n, ct);
     }
 
     [HttpGet("{id:guid}/next", Name = "GetNextGeneration")]
-    public async Task<IActionResult> GetNextGeneration(Guid id, CancellationToken ct)
-    {
-        var lease = await _admissionGate.TryAcquireAsync(TimeSpan.Zero, ct).ConfigureAwait(false);
-        if (lease is null)
-        {
-            return AdmissionRejectedProblem();
-        }
-
-        try
-        {
-            var result = await _getGenerationHandler.HandleAsync(new GetGenerationQuery(new UniverseId(id), 1), ct).ConfigureAwait(false);
-            if (result.Status == ResultStatus.NotFound)
-            {
-                return BoardNotFoundProblem(id);
-            }
-
-            return GenerationResult(result.Value, id);
-        }
-        finally
-        {
-            lease.Dispose();
-        }
-    }
+    [EnableRateLimiting(EvaluationPolicy)]
+    public Task<IActionResult> GetNextGeneration(Guid id, CancellationToken ct) => GenerationAsync(id, 1, ct);
 
     [HttpGet("{id:guid}/final", Name = "GetFinalState")]
+    [EnableRateLimiting(EvaluationPolicy)]
     public async Task<IActionResult> GetFinalState(Guid id, CancellationToken ct)
     {
-        var lease = await _admissionGate.TryAcquireAsync(TimeSpan.Zero, ct).ConfigureAwait(false);
-        if (lease is null)
+        var query = new GetFinalStateQuery(new UniverseId(id), _options.FinalStateIterationBudget);
+        var result = await _getFinalStateHandler.HandleAsync(query, ct);
+        if (result.Status == ResultStatus.NotFound)
         {
-            return AdmissionRejectedProblem();
+            return BoardNotFoundProblem(id);
         }
 
-        try
+        var view = result.Value;
+        if (view.Stabilized is not { } cycle)
         {
-            var query = new GetFinalStateQuery(new UniverseId(id), _options.Value.FinalStateIterationBudget);
-            var result = await _getFinalStateHandler.HandleAsync(query, ct).ConfigureAwait(false);
-            if (result.Status == ResultStatus.NotFound)
-            {
-                return BoardNotFoundProblem(id);
-            }
-
-            var view = result.Value;
-            if (view is not { Converged: true, Pattern: { } pattern })
-            {
-                return Problem(
-                    type: "https://gameoflife.example/problems/final-state-not-converged",
-                    title: "The board did not reach a final state within the iteration budget.",
-                    statusCode: StatusCodes.Status422UnprocessableEntity,
-                    detail: $"Examined {view.IterationsExamined} generations without finding a cycle.");
-            }
-
-            var response = new FinalStateResponse(
-                id.ToString(),
-                Converged: true,
-                view.StabilizedAtGeneration,
-                view.Period,
-                pattern.Width,
-                pattern.Height,
-                pattern.Population,
-                PatternMapper.ToRows(pattern),
-                view.IterationsExamined,
-                BuildFinalStateLinks(id));
-
-            return Ok(response);
+            return Problem(
+                type: "https://gameoflife.example/problems/final-state-not-converged",
+                title: "The board did not reach a final state within the iteration budget.",
+                statusCode: StatusCodes.Status422UnprocessableEntity,
+                detail: $"Examined {view.IterationsExamined} generations without finding a cycle.");
         }
-        finally
-        {
-            lease.Dispose();
-        }
+
+        var response = new FinalStateResponse(
+            id.ToString(),
+            cycle.AtGeneration,
+            cycle.Period,
+            cycle.Pattern.Width,
+            cycle.Pattern.Height,
+            cycle.Pattern.Population,
+            PatternMapper.ToRows(cycle.Pattern),
+            view.IterationsExamined,
+            BuildFinalStateLinks(id));
+
+        return Ok(response);
     }
 
-    private IActionResult GenerationResult(PatternView view, Guid id)
+    private async Task<IActionResult> GenerationAsync(Guid id, int generation, CancellationToken ct)
     {
-        var etag = PatternMapper.ComputeETag(view.Pattern);
-        Response.Headers.ETag = etag;
-        Response.Headers.CacheControl = "public, max-age=31536000, immutable";
+        // Derived from identity, not from content. The representation is a pure function of the board
+        // id and the generation index, both immutable, so the validator can be computed without
+        // evolving anything, which is what lets a conditional request skip the loop entirely. A
+        // content hash cannot do that, and it also collides: a blinker at generations 0 and 2 has the
+        // same cells but is a different representation, with a different `generation` and `_links`.
+        // The `v1` prefix is the representation version, so a change to the response shape invalidates
+        // previously issued validators.
+        var etag = $"\"v1-{id}-{generation}\"";
 
         if (Request.Headers.IfNoneMatch.Any(value => value == etag))
         {
+            // Still confirm the board exists, so a fabricated validator gets a 404 rather than a
+            // spurious 304. This is a point lookup, not an evolution.
+            var known = await _getUniverseHandler.HandleAsync(new GetUniverseQuery(new UniverseId(id)), ct);
+            if (known.Status == ResultStatus.NotFound)
+            {
+                return BoardNotFoundProblem(id);
+            }
+
+            SetGenerationCacheHeaders(etag);
             return StatusCode(StatusCodes.Status304NotModified);
         }
+
+        var result = await _getGenerationHandler.HandleAsync(new GetGenerationQuery(new UniverseId(id), generation), ct);
+        if (result.Status == ResultStatus.NotFound)
+        {
+            return BoardNotFoundProblem(id);
+        }
+
+        var view = result.Value;
+        SetGenerationCacheHeaders(etag);
 
         var response = new GenerationResponse(
             id.ToString(),
@@ -223,6 +192,12 @@ public sealed class BoardsController : ControllerBase
             BuildGenerationLinks(id, view.Generation));
 
         return Ok(response);
+    }
+
+    private void SetGenerationCacheHeaders(string etag)
+    {
+        Response.Headers.ETag = etag;
+        Response.Headers.CacheControl = "public, max-age=31536000, immutable";
     }
 
     private Dictionary<string, string> BuildBoardLinks(Guid id) => new()
@@ -269,20 +244,5 @@ public sealed class BoardsController : ControllerBase
         };
         problemDetails.Errors["request"] = errors.ToArray();
         return new BadRequestObjectResult(problemDetails);
-    }
-
-    private IActionResult AdmissionRejectedProblem()
-    {
-        Response.Headers.RetryAfter = "1";
-        return new ObjectResult(new ProblemDetails
-        {
-            Type = "https://gameoflife.example/problems/admission-rejected",
-            Title = "The server is at capacity.",
-            Status = StatusCodes.Status503ServiceUnavailable,
-            Detail = "Too many evaluations are in progress. Retry shortly.",
-        })
-        {
-            StatusCode = StatusCodes.Status503ServiceUnavailable,
-        };
     }
 }

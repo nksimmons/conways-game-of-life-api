@@ -20,7 +20,6 @@ public sealed class GameOfLifeDbContext : DbContext
             entity.Property(u => u.RuleId).HasMaxLength(64).IsRequired();
             entity.Property(u => u.TopologyId).HasMaxLength(64).IsRequired();
             entity.Property(u => u.SeedPacked).IsRequired();
-            entity.Property(u => u.SeedHash).IsRequired();
         });
     }
 }

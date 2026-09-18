@@ -18,6 +18,9 @@ public sealed class EfUniverseRepository : IUniverseRepository
     {
         using var activity = GameOfLifeDiagnostics.ActivitySource.StartActivity("persistence.find-universe");
 
+        // AsNoTracking: a universe is never updated after AddAsync (docs/design.md §7.1), so there is
+        // nothing for the change tracker to track and no later SaveChanges that could need it. Skipping
+        // it avoids the snapshot and identity-map bookkeeping EF would otherwise do for free.
         var record = await _dbContext.Universes
             .AsNoTracking()
             .FirstOrDefaultAsync(u => u.Id == id.Value, ct)
@@ -51,7 +54,6 @@ public sealed class EfUniverseRepository : IUniverseRepository
             RuleId = universe.Rule.Value,
             TopologyId = universe.Topology.Value,
             SeedPacked = universe.Seed.PackedBytes.ToArray(),
-            SeedHash = universe.Seed.ComputeHash().ToByteArray(),
             CreatedAtUtc = universe.CreatedAtUtc,
         };
 

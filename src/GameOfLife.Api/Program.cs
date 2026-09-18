@@ -1,4 +1,3 @@
-using System.Threading.RateLimiting;
 using GameOfLife.Domain.Observability;
 using GameOfLife.Infrastructure;
 using GameOfLife.Application;
@@ -6,14 +5,14 @@ using GameOfLife.Application.CreateUniverse;
 using GameOfLife.Application.GetFinalState;
 using GameOfLife.Application.GetGeneration;
 using GameOfLife.Application.GetUniverse;
-using GameOfLife.Api.Concurrency;
+using GameOfLife.Api.Controllers;
 using GameOfLife.Api.ErrorHandling;
 using GameOfLife.Api.Options;
+using GameOfLife.Api.Swagger;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
@@ -38,17 +37,16 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
 
 builder.Services.AddControllers().AddControllersAsServices();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options => options.OperationFilter<GliderExampleOperationFilter>());
 
 builder.Services.AddSingleton(TimeProvider.System);
 
+var gameOfLifeSection = builder.Configuration.GetSection(GameOfLifeOptions.SectionName);
 builder.Services
     .AddOptions<GameOfLifeOptions>()
-    .Bind(builder.Configuration.GetSection(GameOfLifeOptions.SectionName))
+    .Bind(gameOfLifeSection)
+    .ValidateDataAnnotations()
     .ValidateOnStart();
-builder.Services.AddSingleton<IValidateOptions<GameOfLifeOptions>, GameOfLifeOptionsValidator>();
-
-builder.Services.AddSingleton<IEvaluationAdmissionGate, EvaluationAdmissionGate>();
 
 builder.Services.AddScoped<ICommandHandler<CreateUniverseCommand>, CreateUniverseCommandHandler>();
 builder.Services.AddScoped<IQueryHandler<GetUniverseQuery, UniverseView>, GetUniverseQueryHandler>();
@@ -73,10 +71,24 @@ builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics => metrics
         .AddAspNetCoreInstrumentation()
         .AddMeter(GameOfLifeDiagnostics.Name)
+        .AddMeter("Microsoft.AspNetCore.RateLimiting")
         .AddConsoleExporter());
 
+// The one admission control in the process: it bounds how many CPU-bound evaluations run at once,
+// which the input caps in GameOfLifeOptions cannot do (those bound the cost of a single request).
+// QueueLimit 0 rejects immediately rather than queueing, because a request answered after the client
+// has given up has cost a core for nothing. See docs/design.md §8.4.
 builder.Services.AddRateLimiter(options =>
 {
+    var permits = gameOfLifeSection.Get<GameOfLifeOptions>()?.ResolvedMaxConcurrentEvaluations
+        ?? Environment.ProcessorCount;
+
+    options.AddConcurrencyLimiter(BoardsController.EvaluationPolicy, limiter =>
+    {
+        limiter.PermitLimit = permits;
+        limiter.QueueLimit = 0;
+    });
+
     options.OnRejected = async (context, ct) =>
     {
         context.HttpContext.Response.Headers.RetryAfter = "1";
@@ -87,22 +99,12 @@ builder.Services.AddRateLimiter(options =>
                 Type = "https://gameoflife.example/problems/admission-rejected",
                 Title = "The server is at capacity.",
                 Status = StatusCodes.Status503ServiceUnavailable,
+                Detail = "Too many evaluations are in progress. Retry shortly.",
             },
             options: null,
             contentType: "application/problem+json",
-            ct).ConfigureAwait(false);
+            ct);
     };
-
-    // An outer bound on total in-flight requests, distinct from the per-evaluation admission gate
-    // (Web/Concurrency/EvaluationAdmissionGate) which bounds only the CPU-bound endpoints.
-    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(_ =>
-        RateLimitPartition.GetConcurrencyLimiter(
-            partitionKey: "global",
-            factory: _ => new ConcurrencyLimiterOptions
-            {
-                PermitLimit = Environment.ProcessorCount * 8,
-                QueueLimit = 0,
-            }));
 });
 
 var app = builder.Build();
@@ -111,7 +113,6 @@ app.Services.EnsureDatabaseCreated();
 
 app.UseSerilogRequestLogging();
 
-// Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -122,8 +123,6 @@ app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.UseHttpsRedirection();
 app.UseRateLimiter();
-
-app.UseAuthorization();
 
 app.MapControllers();
 
@@ -142,4 +141,3 @@ app.Run();
 public partial class Program
 {
 }
-

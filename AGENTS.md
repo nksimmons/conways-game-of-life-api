@@ -89,7 +89,7 @@ Domain objects validate their own invariants in constructors via guard clauses. 
 - **Update generations simultaneously.** Every cell must read its neighbours' *previous* state. Updating in reading order produces "NaiveLife", a subtly different automaton and the most common bug in this problem. The Blinker and Glider tests exist to catch it; keep them passing.
 - **There is no generation checkpointing, and `GET` handlers write nothing.** Checkpointing was designed and then cut, because bounding the input caps bounded worst-case cost directly ([docs/design.md §12](docs/design.md)). Do not reintroduce a snapshot table, a cache port, or a best-effort write on a read path.
 
-  This is a decision taken on current numbers, not a permanent ban. At the present caps a generation costs roughly a tenth of a millisecond ([docs/design.md §10.1.1](docs/design.md)), so a cache would save little and cost a storage dependency, an eviction policy, and a write on a read path. ADR 010 records exactly what would justify reversing it: measured repeated deep reads of the same universe, an `ETag` hit ratio too low to absorb them, or a rise in the caps. Bring evidence from those metrics and reopen the ADR; do not add the mechanism back quietly.
+  This is a decision taken on current numbers, not a permanent ban. ADR 010 records what would justify reversing it: measured repeated deep reads of the same universe, an `ETag` hit ratio too low to absorb them, or a rise in the caps. Note that [docs/design.md §10.1.1](docs/design.md) now reports measured timings that are roughly ten times the estimates the ADR was originally decided on, and flags the `final` replay-on-hit as work a checkpoint would genuinely remove. That is an argument for reopening the ADR with evidence, which is exactly what it asks for; it is not licence to add the mechanism back quietly.
 
 ---
 
@@ -116,7 +116,7 @@ There is no shared mutable state on the request path by design. Keep it that way
 
 Never take a coarse-grained lock around a request path. Never `lock` around an `await` (it will not compile with `await` inside, and the pattern indicates a design problem).
 
-Bound concurrency explicitly, since unbounded parallelism is a defect. Use `SemaphoreSlim` admission gating sized from `Environment.ProcessorCount`, and return `503` with `Retry-After` when saturated rather than queueing without limit.
+Bound concurrency explicitly, since unbounded parallelism is a defect. Admission is one mechanism, not two: a named ASP.NET Core rate-limiter concurrency policy sized from `Environment.ProcessorCount`, applied to the endpoints that run the evolution loop, returning `503` with `Retry-After` when saturated rather than queueing without limit. Do not reintroduce a hand-rolled `SemaphoreSlim` gate beside it; [docs/design.md §8.4](docs/design.md) records why the two were collapsed into one.
 
 ### 3.3 Dependency injection
 
@@ -197,7 +197,7 @@ Not optional, and not deferred to the end:
 
 - Structured logging (Serilog, JSON to stdout) with a correlation id per request.
 - OpenTelemetry traces with spans around evolution, checkpoint lookup, and database access.
-- Metrics: generations computed, evolution duration histogram, checkpoint hit ratio, convergence outcomes, admission rejections.
+- Metrics: generations computed, evolution duration histogram, convergence outcomes, and admission rejections. There is no checkpoint hit ratio, because there is no checkpointing.
 - `/health/live` and `/health/ready` kept separate, so readiness checks the database and liveness checks only the process.
 
 ---
